@@ -5,7 +5,7 @@
 Đây là **Unity Il2CppDumper GUI** mà tôi phát triển dựa trên mã nguồn gốc của **Perfare**.  
 Phiên bản này đã được tối ưu và chỉnh sửa để hoạt động tốt với **Call of Duty Mobile**.  
 
-✅ Chạy trên **Windows**
+✅ Chạy trên **Windows**  
 ✅ Hỗ trợ cả **Android** và **iOS**  
 ✅ Giao diện GUI trực quan, dễ sử dụng  
 ✅ Có thể tạo **struct**, **dummy dll**, và xuất ra script cho IDA/Ghidra/Hopper   
