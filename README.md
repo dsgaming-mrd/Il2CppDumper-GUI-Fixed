@@ -37,8 +37,6 @@ Phiên bản này đã được tối ưu và chỉnh sửa để hoạt động
 
 ## 🙏 Credits  
 
-## 🙏 Credits  
-
 - **[Perfare](https://github.com/Perfare)** – Tác giả gốc của Il2CppDumper  
 - **[AndnixSH](https://github.com/AndnixSH)** – Tác giả GUI phiên bản trước  
 - **[tien0246](https://github.com/tien0246)** – Nâng cấp Il2CppDumper (bản dành riêng CODM)  
