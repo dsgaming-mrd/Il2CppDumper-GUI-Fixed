@@ -62,6 +62,7 @@ namespace Il2CppDumper
                         writer.Write($"\n// Namespace: {metadata.GetStringFromIndex(typeDef.namespaceIndex)}\n");
                         if (config.DumpAttribute)
                         {
+                            writer.Write(GetCustomAttribute(imageDef, typeDef.customAttributeIndex, typeDef.token));
                         }
                         if (config.DumpAttribute && (typeDef.flags & TYPE_ATTRIBUTE_SERIALIZABLE) != 0)
                             writer.Write("[Serializable]\n");
@@ -122,6 +123,7 @@ namespace Il2CppDumper
                                 var isConst = false;
                                 if (config.DumpAttribute)
                                 {
+                                    writer.Write(GetCustomAttribute(imageDef, fieldDef.customAttributeIndex, fieldDef.token, "\t"));
                                 }
                                 writer.Write("\t");
                                 var access = fieldType.attrs & FIELD_ATTRIBUTE_FIELD_ACCESS_MASK;
@@ -206,6 +208,7 @@ namespace Il2CppDumper
                                 var propertyDef = metadata.propertyDefs[i];
                                 if (config.DumpAttribute)
                                 {
+                                    writer.Write(GetCustomAttribute(imageDef, propertyDef.customAttributeIndex, propertyDef.token, "\t"));
                                 }
                                 writer.Write("\t");
                                 if (propertyDef.get >= 0)
@@ -243,6 +246,7 @@ namespace Il2CppDumper
                                 var isAbstract = (methodDef.flags & METHOD_ATTRIBUTE_ABSTRACT) != 0;
                                 if (config.DumpAttribute)
                                 {
+                                    writer.Write(GetCustomAttribute(imageDef, methodDef.customAttributeIndex, methodDef.token, "\t"));
                                 }
                                 if (config.DumpMethodOffset)
                                 {
@@ -383,8 +387,7 @@ namespace Il2CppDumper
                 }
                 catch (Exception e)
                 {
-                    MainForm.Log("ERROR: Some errors in dumping");
-                    MainForm.Log(e.Message);
+                    Console.WriteLine("ERROR: Some errors in dumping");
                     writer.Write("/*");
                     writer.Write(e);
                     writer.Write("*/\n}\n");

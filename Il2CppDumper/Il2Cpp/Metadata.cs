@@ -58,6 +58,22 @@ namespace Il2CppDumper
             }
             Version = version;
             header = ReadClass<Il2CppGlobalMetadataHeader>(0);
+            if (version == 24)
+            {
+                if (header.stringLiteralOffset == 264)
+                {
+                    Version = 24.2;
+                    header = ReadClass<Il2CppGlobalMetadataHeader>(0);
+                }
+                else
+                {
+                    imageDefs = ReadMetadataClassArray<Il2CppImageDefinition>(header.imagesOffset, header.imagesSize);
+                    if (imageDefs.Any(x => x.token != 1))
+                    {
+                        Version = 24.1;
+                    }
+                }
+            }
             imageDefs = ReadMetadataClassArray<Il2CppImageDefinition>(header.imagesOffset, header.imagesSize);
             if (Version == 24.2 && header.assembliesSize / 68 < imageDefs.Length)
             {
@@ -113,6 +129,27 @@ namespace Il2CppDumper
             if (Version >= 29)
             {
                 attributeDataRanges = ReadMetadataClassArray<Il2CppCustomAttributeDataRange>(header.attributeDataRangeOffset, header.attributeDataRangeSize);
+            }
+            if (Version > 24)
+            {
+                attributeTypeRangesDic = new Dictionary<Il2CppImageDefinition, Dictionary<uint, int>>();
+                foreach (var imageDef in imageDefs)
+                {
+                    var dic = new Dictionary<uint, int>();
+                    attributeTypeRangesDic[imageDef] = dic;
+                    var end = imageDef.customAttributeStart + imageDef.customAttributeCount;
+                    for (int i = imageDef.customAttributeStart; i < end; i++)
+                    {
+                        if (Version >= 29)
+                        {
+                            dic.Add(attributeDataRanges[i].token, i);
+                        }
+                        else
+                        {
+                            dic.Add(attributeTypeRanges[i].token, i);
+                        }
+                    }
+                }
             }
             if (Version <= 24.1)
             {
@@ -188,7 +225,7 @@ namespace Il2CppDumper
                 for (int i = 0; i < metadataUsageList.count; i++)
                 {
                     var offset = metadataUsageList.start + i;
-                    if (offset >= metadataUsagePairs.Length - 1)
+                    if (offset >= metadataUsagePairs.Length)
                     {
                         continue;
                     }
@@ -198,9 +235,8 @@ namespace Il2CppDumper
                     metadataUsageDic[(Il2CppMetadataUsage)usage][metadataUsagePair.destinationIndex] = decodedIndex;
                 }
             }
-            metadataUsagesCount = metadataUsagePairs.Max(x => x.destinationIndex) + 1;
+            //metadataUsagesCount = metadataUsagePairs.Max(x => x.destinationIndex) + 1;
             metadataUsagesCount = metadataUsageDic.Max(x => x.Value.Select(y => y.Key).DefaultIfEmpty().Max()) + 1;
-
         }
 
         public static uint GetEncodedIndexType(uint index)

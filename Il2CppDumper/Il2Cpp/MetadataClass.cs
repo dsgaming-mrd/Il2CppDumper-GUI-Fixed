@@ -111,8 +111,13 @@ namespace Il2CppDumper
     public class Il2CppAssemblyDefinition
     {
         public int imageIndex;
-        public short customAttributeIndex;
+        [Version(Min = 24.1)]
+        public uint token;
+        [Version(Max = 24)]
+        public int customAttributeIndex;
+        [Version(Min = 20)]
         public int referencedAssemblyStart;
+        [Version(Min = 20)]
         public int referencedAssemblyCount;
         public Il2CppAssemblyNameDefinition aname;
     }
@@ -121,6 +126,7 @@ namespace Il2CppDumper
     {
         public uint nameIndex;
         public uint cultureIndex;
+        [Version(Max = 24.3)]
         public int hashValueIndex;
         public uint publicKeyIndex;
         public uint hash_alg;
@@ -138,33 +144,66 @@ namespace Il2CppDumper
     {
         public uint nameIndex;
         public int assemblyIndex;
+
         public int typeStart;
         public uint typeCount;
+
+        [Version(Min = 24)]
+        public int exportedTypeStart;
+        [Version(Min = 24)]
+        public uint exportedTypeCount;
+
         public int entryPointIndex;
+        [Version(Min = 19)]
+        public uint token;
+
+        [Version(Min = 24.1)]
+        public int customAttributeStart;
+        [Version(Min = 24.1)]
+        public uint customAttributeCount;
     }
 
     public class Il2CppTypeDefinition
     {
         public uint nameIndex;
         public uint namespaceIndex;
+        [Version(Max = 24)]
+        public int customAttributeIndex;
         public int byvalTypeIndex;
+        [Version(Max = 24.5)]
         public int byrefTypeIndex;
+
         public int declaringTypeIndex;
         public int parentIndex;
-        public int elementTypeIndex;
+        public int elementTypeIndex; // we can probably remove this one. Only used for enums
+
+        [Version(Max = 24.1)]
+        public int rgctxStartIndex;
+        [Version(Max = 24.1)]
+        public int rgctxCount;
+
+        public int genericContainerIndex;
+
+        [Version(Max = 22)]
+        public int delegateWrapperFromManagedToNativeIndex;
+        [Version(Max = 22)]
+        public int marshalingFunctionsIndex;
+        [Version(Min = 21, Max = 22)]
+        public int ccwFunctionIndex;
+        [Version(Min = 21, Max = 22)]
+        public int guidIndex;
+
         public uint flags;
+
         public int fieldStart;
         public int methodStart;
+        public int eventStart;
+        public int propertyStart;
+        public int nestedTypesStart;
+        public int interfacesStart;
         public int vtableStart;
-        public short customAttributeIndex;
-        public short rgctxStartIndex;
-        public short rgctxCount;
-        public short genericContainerIndex;
-        public short eventStart;
-        public ushort propertyStart;
-        public short nestedTypesStart;
-        public short interfacesStart;
-        public short interfaceOffsetsStart;
+        public int interfaceOffsetsStart;
+
         public ushort method_count;
         public ushort property_count;
         public ushort field_count;
@@ -173,7 +212,21 @@ namespace Il2CppDumper
         public ushort vtable_count;
         public ushort interfaces_count;
         public ushort interface_offsets_count;
-        public ushort bitfield;
+
+        // bitfield to portably encode boolean values as single bits
+        // 01 - valuetype;
+        // 02 - enumtype;
+        // 03 - has_finalize;
+        // 04 - has_cctor;
+        // 05 - is_blittable;
+        // 06 - is_import_or_windows_runtime;
+        // 07-10 - One of nine possible PackingSize values (0, 1, 2, 4, 8, 16, 32, 64, or 128)
+        // 11 - PackingSize is default
+        // 12 - ClassSize is default
+        // 13-16 - One of nine possible PackingSize values (0, 1, 2, 4, 8, 16, 32, 64, or 128) - the specified packing size (even for explicit layouts)
+        public uint bitfield;
+        [Version(Min = 19)]
+        public uint token;
 
         public bool IsValueType => (bitfield & 0x1) == 1;
         public bool IsEnum => ((bitfield >> 1) & 0x1) == 1;
@@ -182,17 +235,25 @@ namespace Il2CppDumper
     public class Il2CppMethodDefinition
     {
         public uint nameIndex;
-        public int methodIndex;
+        public int declaringType;
         public int returnType;
+		[Version(Min = 31)]
+        public int returnParameterToken;
         public int parameterStart;
+        [Version(Max = 24)]
+        public int customAttributeIndex;
+        public int genericContainerIndex;
+        [Version(Max = 24.1)]
+        public int methodIndex;
+        [Version(Max = 24.1)]
+        public int invokerIndex;
+        [Version(Max = 24.1)]
+        public int delegateWrapperIndex;
+        [Version(Max = 24.1)]
+        public int rgctxStartIndex;
+        [Version(Max = 24.1)]
+        public int rgctxCount;
         public uint token;
-        public ushort declaringType;
-        public short customAttributeIndex;
-        public short genericContainerIndex;
-        public short invokerIndex;
-        public short delegateWrapperIndex;
-        public short rgctxStartIndex;
-        public short rgctxCount;
         public ushort flags;
         public ushort iflags;
         public ushort slot;
@@ -202,7 +263,9 @@ namespace Il2CppDumper
     public class Il2CppParameterDefinition
     {
         public uint nameIndex;
-        public short customAttributeIndex;
+        public uint token;
+        [Version(Max = 24)]
+        public int customAttributeIndex;
         public int typeIndex;
     }
 
@@ -210,7 +273,10 @@ namespace Il2CppDumper
     {
         public uint nameIndex;
         public int typeIndex;
-        public short customAttributeIndex;
+        [Version(Max = 24)]
+        public int customAttributeIndex;
+        [Version(Min = 19)]
+        public uint token;
     }
 
     public class Il2CppFieldDefaultValue
@@ -223,21 +289,27 @@ namespace Il2CppDumper
     public class Il2CppPropertyDefinition
     {
         public uint nameIndex;
-        public short get;
-        public short set;
+        public int get;
+        public int set;
         public uint attrs;
+        [Version(Max = 24)]
+        public int customAttributeIndex;
+        [Version(Min = 19)]
+        public uint token;
     }
 
     public class Il2CppCustomAttributeTypeRange
     {
-        public short start;
-        public short count;
+        [Version(Min = 24.1)]
+        public uint token;
+        public int start;
+        public int count;
     }
 
     public class Il2CppMetadataUsageList
     {
         public uint start;
-        public ushort count;
+        public uint count;
     }
 
     public class Il2CppMetadataUsagePair
@@ -263,33 +335,36 @@ namespace Il2CppDumper
     {
         public uint nameIndex;
         public int typeIndex;
-        public short add;
-        public short remove;
-        public short raise;
-        public short customAttributeIndex;
+        public int add;
+        public int remove;
+        public int raise;
+        [Version(Max = 24)]
+        public int customAttributeIndex;
+        [Version(Min = 19)]
+        public uint token;
     }
 
     public class Il2CppGenericContainer
     {
         /* index of the generic type definition or the generic method definition corresponding to this container */
         public int ownerIndex; // either index into Il2CppClass metadata array or Il2CppMethodDefinition array
-        public int genericParameterStart;
-        public short type_argc;
+        public int type_argc;
         /* If true, we're a generic method, otherwise a generic type definition. */
-        public short is_method;
+        public int is_method;
         /* Our type parameters. */
+        public int genericParameterStart;
     }
 
     public class Il2CppFieldRef
     {
         public int typeIndex;
-        public short fieldIndex; // local offset into type fields
+        public int fieldIndex; // local offset into type fields
     }
 
     public class Il2CppGenericParameter
     {
+        public int ownerIndex;  /* Type or method this parameter was defined in. */
         public uint nameIndex;
-        public short ownerIndex;  /* Type or method this parameter was defined in. */
         public short constraintsStart;
         public short constraintsCount;
         public ushort num;

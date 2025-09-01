@@ -119,7 +119,7 @@ namespace Il2CppDumper
         #region Il2Cpp dumper
         private bool Init(string il2cppPath, string metadataPath, out Metadata metadata, out Il2Cpp il2Cpp)
         {
-            Log("Il2cppDumper GUI for Call of Duty Mobile made by Mr D - DS Gaming form VNC Team", Brushes.Cyan);
+            Log("Il2cppDumper GUI Fixed made by Mr D - DS Gaming form VNC Team", Brushes.Cyan);
             string Mach_O = "2";
 
             if (!use64bitMach_O)

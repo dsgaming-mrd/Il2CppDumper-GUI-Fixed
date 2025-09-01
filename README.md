@@ -1,9 +1,9 @@
-# Il2CppDumper cho Call of Duty Mobile  
+# Il2CppDumper GUI Fixed
 
 ![Il2CppDumper GUI](Screenshot.png)  
 
 Đây là **Unity Il2CppDumper GUI** mà tôi phát triển dựa trên mã nguồn gốc của **Perfare**.  
-Phiên bản này đã được tối ưu và chỉnh sửa để hoạt động tốt với **Call of Duty Mobile**.  
+Phiên bản này đã được tối ưu và sửa một số lỗi nhỏ để hoạt động tốt hơn với các trò chơi bị lỗi **Metadata**.  
 
 ✅ Chạy trên **Windows**  
 ✅ Hỗ trợ cả **Android** và **iOS**  
@@ -39,5 +39,4 @@ Phiên bản này đã được tối ưu và chỉnh sửa để hoạt động
 
 - **[Perfare](https://github.com/Perfare)** – Tác giả gốc của Il2CppDumper  
 - **[AndnixSH](https://github.com/AndnixSH)** – Tác giả GUI phiên bản trước  
-- **[tien0246](https://github.com/tien0246)** – Nâng cấp Il2CppDumper (bản dành riêng CODM)  
-- **Mr D - DS Gaming (VNC Team)** – Phát triển bản tùy biến GUI hỗ trợ CODM (Android/iOS)  
+- **Mr D - DS Gaming (VNC Team)** – Phát triển bản tùy biến GUI (Android/iOS)

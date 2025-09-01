@@ -52,22 +52,34 @@ namespace Il2CppDumper
         {
             if (codeRegistration != 0)
             {
-                var limit = this is WebAssemblyMemory ? 0x35000u : 0x50000u; //TODO
+			    var limit = this is WebAssemblyMemory ? 0x35000u : 0x50000u; //TODO
                 if (Version >= 24.2)
                 {
                     pCodeRegistration = MapVATR<Il2CppCodeRegistration>(codeRegistration);
-                    if (Version == 29)
+					if (Version == 31)
                     {
                         if (pCodeRegistration.genericMethodPointersCount > limit)
                         {
+                            codeRegistration -= PointerSize * 2;
+                        }
+                        else
+                        {
+                            Version = 29;
+                            Console.WriteLine($"Change il2cpp version to: {Version}");
+                        }
+                    }
+                    if (Version == 29)
+                    {
+                        if (pCodeRegistration.genericMethodPointersCount > limit) //TODO
+                        {
                             Version = 29.1;
                             codeRegistration -= PointerSize * 2;
-                            MainForm.Log($"Change il2cpp version to: {Version}");
+                            Console.WriteLine($"Change il2cpp version to: {Version}");
                         }
                     }
                     if (Version == 27)
                     {
-                        if (pCodeRegistration.reversePInvokeWrapperCount > limit)
+                        if (pCodeRegistration.reversePInvokeWrapperCount > limit) //TODO
                         {
                             Version = 27.1;
                             codeRegistration -= PointerSize;
@@ -77,7 +89,7 @@ namespace Il2CppDumper
                     if (Version == 24.4)
                     {
                         codeRegistration -= PointerSize * 2;
-                        if (pCodeRegistration.reversePInvokeWrapperCount > limit)
+                        if (pCodeRegistration.reversePInvokeWrapperCount > limit) //TODO
                         {
                             Version = 24.5;
                             codeRegistration -= PointerSize;
@@ -109,7 +121,7 @@ namespace Il2CppDumper
         {
             pCodeRegistration = MapVATR<Il2CppCodeRegistration>(codeRegistration);
             var limit = this is WebAssemblyMemory ? 0x35000u : 0x50000u; //TODO
-            if (Version == 27 && pCodeRegistration.invokerPointersCount > limit)
+            if (Version == 27 && pCodeRegistration.invokerPointersCount > limit) //TODO
             {
                 Version = 27.1;
                 MainForm.Log($"Change il2cpp version to: {Version}");
@@ -127,13 +139,13 @@ namespace Il2CppDumper
                         if (rgctxs.All(x => x.data.rgctxDataDummy > limit))
                         {
                             Version = 27.2;
-                            MainForm.Log($"Change il2cpp version to: {Version}");
+                            Console.WriteLine($"Change il2cpp version to: {Version}");
                         }
                         break;
                     }
                 }
             }
-            if (Version == 24.4 && pCodeRegistration.invokerPointersCount > limit)
+            if (Version == 24.4 && pCodeRegistration.invokerPointersCount > limit) //TODO
             {
                 Version = 24.5;
                 MainForm.Log($"Change il2cpp version to: {Version}");
@@ -184,7 +196,7 @@ namespace Il2CppDumper
             for (var i = 0; i < pMetadataRegistration.typesCount; ++i)
             {
                 types[i] = MapVATR<Il2CppType>(pTypes[i]);
-                types[i].Init(Version);
+                 types[i].Init(Version);
                 typeDic.Add(pTypes[i], types[i]);
             }
             if (Version >= 24.2)
@@ -253,7 +265,7 @@ namespace Il2CppDumper
         {
             return ReadClassArray<T>(MapVATR(addr), count);
         }
-
+		
         public T[] MapVATR<T>(ulong addr, long count) where T : new()
         {
             return ReadClassArray<T>(MapVATR(addr), count);
@@ -307,6 +319,7 @@ namespace Il2CppDumper
             }
             return type;
         }
+
 
         public ulong GetMethodPointer(string imageName, Il2CppMethodDefinition methodDef)
         {
