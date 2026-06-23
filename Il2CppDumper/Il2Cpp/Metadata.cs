@@ -52,12 +52,16 @@ namespace Il2CppDumper
             {
                 throw new InvalidDataException("ERROR: Metadata file supplied is not valid metadata file.");
             }
-            if (version < 16 || version > 31)
+            if (version < 16 || version > 39)
             {
                 throw new NotSupportedException($"ERROR: Metadata file supplied is not a supported version[{version}].");
             }
             Version = version;
             header = ReadClass<Il2CppGlobalMetadataHeader>(0);
+            // Metadata v38+ (Unity 6000.3) uses variable-width table indices whose
+            // sizes are derived from the per-table counts in the header. Compute
+            // those widths now so every subsequent struct read decodes correctly.
+            IndexSizes = IndexWidths.FromHeader(header, Version);
             if (version == 24)
             {
                 if (header.stringLiteralOffset == 264)
@@ -74,6 +78,11 @@ namespace Il2CppDumper
                     }
                 }
             }
+            // Tables read size-based (no explicit count): for v38+ these are walked
+            // struct-by-struct until the section's byte range is consumed, matching
+            // the il2cpp layout. This is required for attributeDataRanges (which has
+            // a trailing sentinel the header count omits) and is the safe choice for
+            // the variable-size image/assembly/default-value/field-ref/string tables.
             imageDefs = ReadMetadataClassArray<Il2CppImageDefinition>(header.imagesOffset, header.imagesSize);
             if (Version == 24.2 && header.assembliesSize / 68 < imageDefs.Length)
             {
@@ -93,21 +102,38 @@ namespace Il2CppDumper
             {
                 Version = 24.1;
             }
-            typeDefs = ReadMetadataClassArray<Il2CppTypeDefinition>(header.typeDefinitionsOffset, header.typeDefinitionsSize);
-            methodDefs = ReadMetadataClassArray<Il2CppMethodDefinition>(header.methodsOffset, header.methodsSize);
-            parameterDefs = ReadMetadataClassArray<Il2CppParameterDefinition>(header.parametersOffset, header.parametersSize);
-            fieldDefs = ReadMetadataClassArray<Il2CppFieldDefinition>(header.fieldsOffset, header.fieldsSize);
+            typeDefs = ReadMetadataClassArray<Il2CppTypeDefinition>(header.typeDefinitionsOffset, header.typeDefinitionsSize, header.typeDefinitionsCount);
+            methodDefs = ReadMetadataClassArray<Il2CppMethodDefinition>(header.methodsOffset, header.methodsSize, header.methodsCount);
+            parameterDefs = ReadMetadataClassArray<Il2CppParameterDefinition>(header.parametersOffset, header.parametersSize, header.parametersCount);
+            fieldDefs = ReadMetadataClassArray<Il2CppFieldDefinition>(header.fieldsOffset, header.fieldsSize, header.fieldsCount);
+            // Metadata v35+ (Unity 6000.3.0a2) removed Il2CppTypeDefinition.elementTypeIndex.
+            // For enums the underlying type is the type of the first (value__) field, so
+            // reconstruct it here to keep enum output correct (StructGenerator / executor).
+            if (Version >= 35)
+            {
+                foreach (var typeDef in typeDefs)
+                {
+                    if (typeDef.IsEnum && typeDef.field_count > 0 && typeDef.fieldStart >= 0 && typeDef.fieldStart < fieldDefs.Length)
+                    {
+                        typeDef.elementTypeIndex = fieldDefs[typeDef.fieldStart].typeIndex;
+                    }
+                }
+            }
             var fieldDefaultValues = ReadMetadataClassArray<Il2CppFieldDefaultValue>(header.fieldDefaultValuesOffset, header.fieldDefaultValuesSize);
             var parameterDefaultValues = ReadMetadataClassArray<Il2CppParameterDefaultValue>(header.parameterDefaultValuesOffset, header.parameterDefaultValuesSize);
             fieldDefaultValuesDic = fieldDefaultValues.ToDictionary(x => x.fieldIndex);
             parameterDefaultValuesDic = parameterDefaultValues.ToDictionary(x => x.parameterIndex);
-            propertyDefs = ReadMetadataClassArray<Il2CppPropertyDefinition>(header.propertiesOffset, header.propertiesSize);
-            interfaceIndices = ReadClassArray<int>(header.interfacesOffset, header.interfacesSize / 4);
+            propertyDefs = ReadMetadataClassArray<Il2CppPropertyDefinition>(header.propertiesOffset, header.propertiesSize, header.propertiesCount);
+            interfaceIndices = ReadTypeIndexArray(header.interfacesOffset, header.interfacesSize);
             nestedTypeIndices = ReadClassArray<int>(header.nestedTypesOffset, header.nestedTypesSize / 4);
-            eventDefs = ReadMetadataClassArray<Il2CppEventDefinition>(header.eventsOffset, header.eventsSize);
-            genericContainers = ReadMetadataClassArray<Il2CppGenericContainer>(header.genericContainersOffset, header.genericContainersSize);
-            genericParameters = ReadMetadataClassArray<Il2CppGenericParameter>(header.genericParametersOffset, header.genericParametersSize);
-            constraintIndices = ReadClassArray<int>(header.genericParameterConstraintsOffset, header.genericParameterConstraintsSize / 4);
+            eventDefs = ReadMetadataClassArray<Il2CppEventDefinition>(header.eventsOffset, header.eventsSize, header.eventsCount);
+            genericContainers = ReadMetadataClassArray<Il2CppGenericContainer>(header.genericContainersOffset, header.genericContainersSize, header.genericContainersCount);
+            genericParameters = ReadMetadataClassArray<Il2CppGenericParameter>(header.genericParametersOffset, header.genericParametersSize, header.genericParametersCount);
+            // Generic parameter constraints are a TypeIndex[] (same element type as
+            // the interfaces table), so for metadata v38+ they use the variable
+            // TypeIndex width, not a fixed 4 bytes. (nestedTypeIndices is a
+            // TypeDefinitionIndex[] and stays 4-byte.)
+            constraintIndices = ReadTypeIndexArray(header.genericParameterConstraintsOffset, header.genericParameterConstraintsSize);
             vtableMethods = ReadClassArray<uint>(header.vtableMethodsOffset, header.vtableMethodsSize / 4);
             stringLiterals = ReadMetadataClassArray<Il2CppStringLiteral>(header.stringLiteralOffset, header.stringLiteralSize);
             if (Version > 16)
@@ -128,6 +154,9 @@ namespace Il2CppDumper
             }
             if (Version >= 29)
             {
+                // NOTE: read by size, not count — the table has a trailing sentinel
+                // entry (used to bound the last attribute's blob) that the header
+                // attributeDataRangeCount does not include.
                 attributeDataRanges = ReadMetadataClassArray<Il2CppCustomAttributeDataRange>(header.attributeDataRangeOffset, header.attributeDataRangeSize);
             }
             if (Version > 24)
@@ -157,9 +186,52 @@ namespace Il2CppDumper
             }
         }
 
-        private T[] ReadMetadataClassArray<T>(uint addr, int count) where T : new()
+        private T[] ReadMetadataClassArray<T>(uint addr, int size, int count = 0) where T : new()
         {
-            return ReadClassArray<T>(addr, count / SizeOf(typeof(T)));
+            // Metadata v38+: many structs have a variable on-disk size, so their
+            // element count can't be derived from size / SizeOf. Use the explicit
+            // table count from the header when available, otherwise read structs
+            // sequentially until the section's byte range is consumed.
+            if (Version >= 38)
+            {
+                if (count > 0)
+                {
+                    return ReadClassArray<T>(addr, count);
+                }
+                return ReadMetadataClassArrayBySize<T>(addr, size);
+            }
+            return ReadClassArray<T>(addr, size / SizeOf(typeof(T)));
+        }
+        private T[] ReadMetadataClassArrayBySize<T>(uint addr, int size) where T : new()
+        {
+            var result = new List<T>();
+            Position = addr;
+            var end = addr + (ulong)size;
+            while (Position < end)
+            {
+                result.Add(ReadClass<T>());
+            }
+            return result.ToArray();
+        }
+        /// <summary>
+        /// Reads the interfaces table, which is a flat array of TypeIndex values.
+        /// For metadata v38+ each element uses the variable TypeIndex width.
+        /// </summary>
+        private int[] ReadTypeIndexArray(uint addr, int size)
+        {
+            if (Version >= 38)
+            {
+                var width = IndexSizes.TypeIndex;
+                var count = width > 0 ? size / width : 0;
+                var result = new int[count];
+                Position = addr;
+                for (var i = 0; i < count; i++)
+                {
+                    result[i] = ReadVariableIndex(width);
+                }
+                return result;
+            }
+            return ReadClassArray<int>(addr, size / 4);
         }
 
         public bool GetFieldDefaultValueFromIndex(int index, out Il2CppFieldDefaultValue value)
@@ -209,8 +281,22 @@ namespace Il2CppDumper
         public string GetStringLiteralFromIndex(uint index)
         {
             var stringLiteral = stringLiterals[index];
-            Position = (uint)(header.stringLiteralDataOffset + stringLiteral.dataIndex);
-            return Encoding.UTF8.GetString(ReadBytes((int)stringLiteral.length));
+            // Guard against corrupt/obfuscated entries (seen in protected binaries):
+            // a bogus length could otherwise allocate a multi-GB string. Clamp the
+            // read to the bounds of the string-literal data section.
+            long dataStart = (long)header.stringLiteralDataOffset + stringLiteral.dataIndex;
+            long sectionEnd = (long)header.stringLiteralDataOffset + header.stringLiteralDataSize;
+            long length = stringLiteral.length;
+            if (stringLiteral.dataIndex < 0 || dataStart < 0 || dataStart >= sectionEnd || length < 0)
+            {
+                return string.Empty;
+            }
+            if (dataStart + length > sectionEnd)
+            {
+                length = sectionEnd - dataStart;
+            }
+            Position = (uint)dataStart;
+            return Encoding.UTF8.GetString(ReadBytes((int)length));
         }
 
         private void ProcessingMetadataUsage()

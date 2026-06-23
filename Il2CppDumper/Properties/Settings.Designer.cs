@@ -295,5 +295,81 @@ namespace Il2CppDumper.Properties {
                 this["il2cpp_header_to_binja"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Configuration.SettingsProviderAttribute(typeof(Bluegrams.Application.PortableSettingsProvider))]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("True")]
+        public bool GenDumpCs
+        {
+            get
+            {
+                return ((bool)(this["GenDumpCs"]));
+            }
+            set
+            {
+                this["GenDumpCs"] = value;
+            }
+        }
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Configuration.SettingsProviderAttribute(typeof(Bluegrams.Application.PortableSettingsProvider))]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("True")]
+        public bool GenStructFiles
+        {
+            get
+            {
+                return ((bool)(this["GenStructFiles"]));
+            }
+            set
+            {
+                this["GenStructFiles"] = value;
+            }
+        }
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Configuration.SettingsProviderAttribute(typeof(Bluegrams.Application.PortableSettingsProvider))]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("True")]
+        public bool GenDummyDll
+        {
+            get
+            {
+                return ((bool)(this["GenDummyDll"]));
+            }
+            set
+            {
+                this["GenDummyDll"] = value;
+            }
+        }
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Configuration.SettingsProviderAttribute(typeof(Bluegrams.Application.PortableSettingsProvider))]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool FastMode
+        {
+            get
+            {
+                return ((bool)(this["FastMode"]));
+            }
+            set
+            {
+                this["FastMode"] = value;
+            }
+        }
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Configuration.SettingsProviderAttribute(typeof(Bluegrams.Application.PortableSettingsProvider))]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("0")]
+        public int WorkerThreads
+        {
+            get
+            {
+                return ((int)(this["WorkerThreads"]));
+            }
+            set
+            {
+                this["WorkerThreads"] = value;
+            }
+        }
     }
 }

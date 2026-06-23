@@ -13,7 +13,7 @@
 		<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
 		<IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
 		<PlatformTarget>AnyCPU</PlatformTarget>
-		<Prefer32Bit>false</Prefer32Bit>	
+		<Prefer32Bit>false</Prefer32Bit>
 		<PreBuildEvent>rem xcopy $(ProjectDir)Scripts $(ProjectDir)$(OutDir)bin /Y /I /S</PreBuildEvent>
 		<FileVersion>$(PackageVersion)</FileVersion>
 		<ApplicationManifest>app.manifest</ApplicationManifest>
@@ -32,7 +32,7 @@
 	<PropertyGroup>
 	  <PackageProjectUrl>https://github.com/AndnixSH/Il2CppDumper-GUI</PackageProjectUrl>
 	  <RepositoryUrl>https://github.com/AndnixSH/Il2CppDumper-GUI</RepositoryUrl>
-	  <Version>3.0.2</Version>
+	  <Version>3.1.0</Version>
 	  <AssemblyVersion>$(PackageVersion)</AssemblyVersion>
 	</PropertyGroup>
 	<PropertyGroup>

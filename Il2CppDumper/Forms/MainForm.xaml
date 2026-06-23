@@ -35,6 +35,14 @@
             <Setter Property="Spacing"
                     Value="5" />
         </Style>
+
+        <!-- Accent style for the primary dump action -->
+        <Style x:Key="AccentDumpButton"
+               TargetType="Button"
+               BasedOn="{StaticResource AccentButtonStyle}">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
     </Window.Resources>
     <Grid>
         <Grid HorizontalAlignment="Right"
@@ -211,11 +219,11 @@
                         <Button x:Name="startBtn"
                                 AllowDrop="True"
                                 Grid.Column="2"
+                                Style="{StaticResource AccentDumpButton}"
                                 Content="Press start or drop APK, APKS, XAPK, ZIP, decrypted IPA file to dump"
                                 HorizontalContentAlignment="Center"
                                 HorizontalAlignment="Stretch"
                                 VerticalAlignment="Stretch"
-                                FontSize="16"
                                 Click="startBtn_Click"
                                 Tag="start"
                                 DragLeave="OnDragLeave"
@@ -245,6 +253,9 @@
                 </Grid>
             </TabItem>
             <TabItem Header="Settings">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Padding="0,0,8,0">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="349*" />
@@ -252,12 +263,12 @@
                     </Grid.ColumnDefinitions>
                     <Grid>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="130" />
-                            <RowDefinition Height="272*" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <HeaderedContentControl Header="General"
-                                                Margin="0,5,0,28"
-                                                Grid.RowSpan="2">
+                                                Margin="0,5,0,20"
+                                                Grid.Row="0">
                             <ui:SimpleStackPanel>
                                 <CheckBox x:Name="updateChkBox"
                                           Content="Check for updates" />
@@ -266,14 +277,37 @@
                             </ui:SimpleStackPanel>
                         </HeaderedContentControl>
 
-                        <HeaderedContentControl Header="Dumping"
-                                                Margin="0,5,0,28"
+                        <HeaderedContentControl Header="Dumping &amp; performance"
+                                                Margin="0,5,0,20"
                                                 Grid.Row="1">
                             <ui:SimpleStackPanel>
                                 <CheckBox x:Name="extBinaryChkBox"
                                           Content="Extract binary file" />
                                 <CheckBox x:Name="extDatChkBox"
                                           Content="Extract global-metadata.dat" />
+                                <CheckBox x:Name="genDumpCsChkBox"
+                                          Content="Generate dump.cs" />
+                                <CheckBox x:Name="genStructChkBox"
+                                          Content="Generate struct files (script.json, il2cpp.h)" />
+                                <CheckBox x:Name="genDummyDllChkBox"
+                                          Content="Generate dummy DLL" />
+                                <CheckBox x:Name="fastModeChkBox"
+                                          Content="Fast mode (skip metadata-usage scan)" />
+                                <StackPanel Orientation="Horizontal"
+                                            Margin="0,6,0,0">
+                                    <TextBlock Text="Worker threads:"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,8,0" />
+                                    <ComboBox x:Name="threadsCombo"
+                                              Width="150"
+                                              SelectedIndex="0">
+                                        <ComboBoxItem Tag="0">Auto (all cores)</ComboBoxItem>
+                                        <ComboBoxItem Tag="1">1 (single-thread)</ComboBoxItem>
+                                        <ComboBoxItem Tag="2">2</ComboBoxItem>
+                                        <ComboBoxItem Tag="4">4</ComboBoxItem>
+                                        <ComboBoxItem Tag="8">8</ComboBoxItem>
+                                    </ComboBox>
+                                </StackPanel>
                             </ui:SimpleStackPanel>
                         </HeaderedContentControl>
                     </Grid>
@@ -304,12 +338,18 @@
                     </HeaderedContentControl>
 
                 </Grid>
+                </ScrollViewer>
             </TabItem>
             <TabItem Header="About">
                 <ui:SimpleStackPanel>
-                    <TextBlock Text="AndnixSH (GUI design)&#x0a;&#x0a;Perfare (Il2CppDumper)&#x0a;&#x0a;djkaty (Helped me fixing an issue and I used some codes from her's Il2CppInspector)&#x0a;&#x0a;T5ive (Using some of his codes)&#x0a;" />
+                    <TextBlock Text="Il2CppDumper GUI is a tool for reverse engineering Unity games built with IL2CPP. It restores symbols and recovers class, method, and field information from libil2cpp.so / GameAssembly.dll together with the global-metadata.dat file, then exports C# dumps, headers, and scripts you can use in Ghidra, IDA, and other tools."
+                               TextWrapping="Wrap"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,10" />
+                    <TextBlock Text="Axey (v3.1 Unity 6 / metadata v39 upgrade, performance options) &#x0a;&#x0a;AndnixSH (GUI design)&#x0a;&#x0a;Perfare (Il2CppDumper)&#x0a;&#x0a;djkaty (Helped me fixing an issue and I used some codes from her's Il2CppInspector)&#x0a;&#x0a;T5ive (Using some of his codes)&#x0a;"/>
                     <TextBlock Text="Source code:" />
                     <TextBlock HorizontalAlignment="Left">
+
                        
             <Hyperlink NavigateUri="https://github.com/AndnixSH/Il2CppDumper-GUI"
                         RequestNavigate="Hyperlink_RequestNavigate">

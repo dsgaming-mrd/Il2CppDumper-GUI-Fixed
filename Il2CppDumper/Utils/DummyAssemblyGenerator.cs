@@ -624,7 +624,14 @@ namespace Il2CppDumper
                                     var customAttributeNamedArgument = new CustomAttributeNamedArgument(propertyDefinition.Name, customAttributeArgument);
                                     customAttribute.Properties.Add(customAttributeNamedArgument);
                                 }
-                                customAttributes.Add(customAttribute);
+                                // Validate now so a malformed argument (e.g. a non-enum
+                                // type in an enum position, seen in obfuscated metadata)
+                                // is skipped here by the catch below, instead of aborting
+                                // the entire module when Cecil serializes it.
+                                if (IsCustomAttributeSerializable(customAttribute))
+                                {
+                                    customAttributes.Add(customAttribute);
+                                }
                             }
                         }
                     }
@@ -704,6 +711,68 @@ namespace Il2CppDumper
                 val = GetTypeReference(memberReference, (Il2CppType)val);
             }
             return new CustomAttributeArgument(typeReference, val);
+        }
+
+        // Mono.Cecil serializes any custom-attribute argument whose type is not a
+        // primitive/string/Type/Object as an enum, and throws if that type does not
+        // resolve to an actual enum. Obfuscated/protected metadata can produce such
+        // mismatches; detect them up front so the offending attribute is dropped
+        // rather than failing the whole assembly write.
+        private static readonly HashSet<string> primitiveAttributeArgTypes = new(StringComparer.Ordinal)
+        {
+            "System.Boolean", "System.Char", "System.SByte", "System.Byte",
+            "System.Int16", "System.UInt16", "System.Int32", "System.UInt32",
+            "System.Int64", "System.UInt64", "System.Single", "System.Double",
+            "System.String", "System.Object", "System.Type",
+        };
+        private static bool IsCustomAttributeSerializable(CustomAttribute customAttribute)
+        {
+            foreach (var arg in customAttribute.ConstructorArguments)
+            {
+                if (!IsAttributeArgumentSerializable(arg)) return false;
+            }
+            foreach (var arg in customAttribute.Fields)
+            {
+                if (!IsAttributeArgumentSerializable(arg.Argument)) return false;
+            }
+            foreach (var arg in customAttribute.Properties)
+            {
+                if (!IsAttributeArgumentSerializable(arg.Argument)) return false;
+            }
+            return true;
+        }
+        private static bool IsAttributeArgumentSerializable(CustomAttributeArgument argument)
+        {
+            var type = argument.Type;
+            if (type == null) return false;
+            if (type is ArrayType arrayType)
+            {
+                if (argument.Value is CustomAttributeArgument[] elements)
+                {
+                    foreach (var element in elements)
+                    {
+                        if (!IsAttributeArgumentSerializable(element)) return false;
+                    }
+                }
+                return true;
+            }
+            if (argument.Value is CustomAttributeArgument boxed)
+            {
+                // boxed object argument: validate the inner (real) argument
+                return IsAttributeArgumentSerializable(boxed);
+            }
+            if (primitiveAttributeArgTypes.Contains(type.FullName)) return true;
+            // Anything else is written by Cecil as an enum; require it to resolve to one.
+            try
+            {
+                var resolved = type.Resolve();
+                if (resolved == null) return true; // unknown -> preserve prior behaviour
+                return resolved.IsEnum;
+            }
+            catch
+            {
+                return true;
+            }
         }
 
         private TypeReference GetBlobValueTypeReference(BlobValue blobValue, MemberReference memberReference)

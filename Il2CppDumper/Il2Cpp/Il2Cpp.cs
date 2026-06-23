@@ -56,13 +56,16 @@ namespace Il2CppDumper
                 if (Version >= 24.2)
                 {
                     pCodeRegistration = MapVATR<Il2CppCodeRegistration>(codeRegistration);
-					if (Version == 31)
+                    // Metadata v38/v39 (Unity 6000.3) share the v31 binary
+                    // Il2CppCodeRegistration layout, so the same disambiguation
+                    // applies. We never downgrade a confirmed v38+ metadata file.
+                    if (Version == 31 || Version >= 38)
                     {
                         if (pCodeRegistration.genericMethodPointersCount > limit)
                         {
                             codeRegistration -= PointerSize * 2;
                         }
-                        else
+                        else if (Version == 31)
                         {
                             Version = 29;
                             Console.WriteLine($"Change il2cpp version to: {Version}");

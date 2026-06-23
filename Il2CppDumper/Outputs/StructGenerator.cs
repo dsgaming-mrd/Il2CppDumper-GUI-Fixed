@@ -1,10 +1,12 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using static Il2CppDumper.Il2CppConstants;
 
 namespace Il2CppDumper
@@ -39,9 +41,29 @@ namespace Il2CppDumper
             il2Cpp = il2CppExecutor.il2Cpp;
         }
 
-        public void WriteScript(string outputDir)
+        //private static void WriteJsonToFile<T>(string path, T value)
+        //{
+        //    // UTF-8 without BOM, indented, streamed to disk to avoid allocating a
+        //    // single huge string for very large outputs.
+        //    using var fs = File.Create(path);
+        //    using var writer = new Utf8JsonWriter(fs, new JsonWriterOptions { Indented = true });
+        //    JsonSerializer.Serialize(writer, value, new JsonSerializerOptions { WriteIndented = true, IncludeFields = true });
+        //}
+
+        private static void WriteJsonToFile<T>(string path, T value)
+        {
+            using var fs = File.Create(path);
+
+            JsonSerializer.Serialize(fs, value, new JsonSerializerOptions {
+                WriteIndented = true,
+                IncludeFields = true
+            });
+        }
+
+        public void WriteScript(string outputDir, bool skipMetadataUsage = false, int workerThreads = 0)
         {
             var json = new ScriptJson();
+            MainForm.Log($"  [struct] building name table for {metadata.typeDefs.Length} types...");
             // 生成唯一名称
             for (var imageIndex = 0; imageIndex < metadata.imageDefs.Length; imageIndex++)
             {
@@ -55,6 +77,7 @@ namespace Il2CppDumper
                     CreateStructNameDic(typeDef);
                 }
             }
+            MainForm.Log("  [struct] resolving generic instances...");
             // 生成后面处理泛型实例要用到的字典
             foreach (var il2CppType in il2Cpp.types.Where(x => x.type == Il2CppTypeEnum.IL2CPP_TYPE_GENERICINST))
             {
@@ -71,6 +94,7 @@ namespace Il2CppDumper
                 nameGenericClassDic[typeStructName] = il2CppType;
                 genericClassStructNameDic[il2CppType.data.generic_class] = typeStructName;
             }
+            MainForm.Log("  [struct] processing methods and building signatures...");
             // 处理函数
             foreach (var imageDef in metadata.imageDefs)
             {
@@ -263,79 +287,97 @@ namespace Il2CppDumper
                 json.Addresses[i] = il2Cpp.GetRVA(orderedPointers[i]);
             }
             // 处理MetadataUsage
-            if (il2Cpp.Version >= 27)
+            if (il2Cpp.Version >= 27 && skipMetadataUsage)
             {
+                MainForm.Log("  [struct] skipping metadata-usage scan (fast mode)");
+            }
+            else if (il2Cpp.Version >= 27)
+            {
+                var threads = workerThreads <= 0 ? Environment.ProcessorCount : workerThreads;
+                MainForm.Log($"  [struct] scanning binary data sections for metadata usages ({threads} thread(s))...");
                 var sectionHelper = executor.GetSectionHelper();
+                var pointerSize = (int)il2Cpp.PointerSize;
+                var is32 = il2Cpp.Is32Bit;
+                // Read-only lengths captured for the parallel (pure-CPU) phase.
+                var typesLen = il2Cpp.types.Length;
+                var methodDefsLen = metadata.methodDefs.Length;
+                var fieldRefsLen = metadata.fieldRefs.Length;
+                var stringLiteralsLen = metadata.stringLiterals.Length;
+                var methodSpecsLen = il2Cpp.methodSpecs.Length;
+                // Collect candidate usages across all sections. The scan body only
+                // reads the section byte copy + read-only state (MapRTVA and the
+                // decode helpers are pure), so it is safe to run in parallel; the
+                // shared metadata stream is only touched later, single-threaded.
+                var hits = new ConcurrentBag<(ulong addr, uint usage, uint decodedIndex, ulong va)>();
                 foreach (var sec in sectionHelper.Data)
                 {
-                    il2Cpp.Position = sec.offset;
-                    var end = Math.Min(sec.offsetEnd, il2Cpp.Length) - il2Cpp.PointerSize;
-                    while (il2Cpp.Position < end)
+                    var start = sec.offset;
+                    var endExclusive = Math.Min(sec.offsetEnd, il2Cpp.Length);
+                    if (endExclusive <= start) continue;
+                    var length = (int)(endExclusive - start);
+                    if (length <= pointerSize) continue;
+                    il2Cpp.Position = start;
+                    var buf = il2Cpp.ReadBytes(length);
+                    long scanLen = length - pointerSize; // last valid pointer start (exclusive)
+                    long numPositions = (scanLen + pointerSize - 1) / pointerSize;
+                    Parallel.For(0, numPositions, new ParallelOptions { MaxDegreeOfParallelism = threads }, idx =>
                     {
-                        var addr = il2Cpp.Position;
-                        var metadataValue = il2Cpp.ReadUIntPtr();
-                        var position = il2Cpp.Position;
-                        if (metadataValue < uint.MaxValue)
+                        var p = (int)(idx * pointerSize);
+                        ulong metadataValue = is32 ? BitConverter.ToUInt32(buf, p) : BitConverter.ToUInt64(buf, p);
+                        if (metadataValue >= uint.MaxValue) return;
+                        var encodedToken = (uint)metadataValue;
+                        var usage = Metadata.GetEncodedIndexType(encodedToken);
+                        if (usage == 0 || usage > 6) return;
+                        var decodedIndex = metadata.GetDecodedMethodIndex(encodedToken);
+                        if (metadataValue != ((usage << 29) | (decodedIndex << 1)) + 1) return;
+                        var addr = start + (ulong)p;
+                        var va = il2Cpp.MapRTVA(addr);
+                        if (va == 0) return;
+                        var inRange = (Il2CppMetadataUsage)usage switch
                         {
-                            var encodedToken = (uint)metadataValue;
-                            var usage = Metadata.GetEncodedIndexType(encodedToken);
-                            if (usage > 0 && usage <= 6)
-                            {
-                                var decodedIndex = metadata.GetDecodedMethodIndex(encodedToken);
-                                if (metadataValue == ((usage << 29) | (decodedIndex << 1)) + 1)
-                                {
-                                    var va = il2Cpp.MapRTVA(addr);
-                                    if (va > 0)
-                                    {
-                                        switch ((Il2CppMetadataUsage)usage)
-                                        {
-                                            case Il2CppMetadataUsage.kIl2CppMetadataUsageInvalid:
-                                                break;
-                                            case Il2CppMetadataUsage.kIl2CppMetadataUsageTypeInfo:
-                                                if (decodedIndex < il2Cpp.types.Length)
-                                                {
-                                                    AddMetadataUsageTypeInfo(json, decodedIndex, va);
-                                                }
-                                                break;
-                                            case Il2CppMetadataUsage.kIl2CppMetadataUsageIl2CppType:
-                                                if (decodedIndex < il2Cpp.types.Length)
-                                                {
-                                                    AddMetadataUsageIl2CppType(json, decodedIndex, va);
-                                                }
-                                                break;
-                                            case Il2CppMetadataUsage.kIl2CppMetadataUsageMethodDef:
-                                                if (decodedIndex < metadata.methodDefs.Length)
-                                                {
-                                                    AddMetadataUsageMethodDef(json, decodedIndex, va);
-                                                }
-                                                break;
-                                            case Il2CppMetadataUsage.kIl2CppMetadataUsageFieldInfo:
-                                                if (decodedIndex < metadata.fieldRefs.Length)
-                                                {
-                                                    AddMetadataUsageFieldInfo(json, decodedIndex, va);
-                                                }
-                                                break;
-                                            case Il2CppMetadataUsage.kIl2CppMetadataUsageStringLiteral:
-                                                if (decodedIndex < metadata.stringLiterals.Length)
-                                                {
-                                                    AddMetadataUsageStringLiteral(json, decodedIndex, va);
-                                                }
-                                                break;
-                                            case Il2CppMetadataUsage.kIl2CppMetadataUsageMethodRef:
-                                                if (decodedIndex < il2Cpp.methodSpecs.Length)
-                                                {
-                                                    AddMetadataUsageMethodRef(json, decodedIndex, va);
-                                                }
-                                                break;
-                                        }
-                                        if (il2Cpp.Position != position)
-                                        {
-                                            il2Cpp.Position = position;
-                                        }
-                                    }
-                                }
-                            }
+                            Il2CppMetadataUsage.kIl2CppMetadataUsageTypeInfo => decodedIndex < typesLen,
+                            Il2CppMetadataUsage.kIl2CppMetadataUsageIl2CppType => decodedIndex < typesLen,
+                            Il2CppMetadataUsage.kIl2CppMetadataUsageMethodDef => decodedIndex < methodDefsLen,
+                            Il2CppMetadataUsage.kIl2CppMetadataUsageFieldInfo => decodedIndex < fieldRefsLen,
+                            Il2CppMetadataUsage.kIl2CppMetadataUsageStringLiteral => decodedIndex < stringLiteralsLen,
+                            Il2CppMetadataUsage.kIl2CppMetadataUsageMethodRef => decodedIndex < methodSpecsLen,
+                            _ => false,
+                        };
+                        if (inRange)
+                        {
+                            hits.Add((addr, usage, decodedIndex, va));
                         }
+                    });
+                }
+                // De-duplicate overlapping sections by offset and resolve in a stable
+                // order on a single thread (string/usage lookups touch the metadata stream).
+                var ordered = hits
+                    .GroupBy(h => h.addr)
+                    .Select(g => g.First())
+                    .OrderBy(h => h.addr)
+                    .ToList();
+                foreach (var h in ordered)
+                {
+                    switch ((Il2CppMetadataUsage)h.usage)
+                    {
+                        case Il2CppMetadataUsage.kIl2CppMetadataUsageTypeInfo:
+                            AddMetadataUsageTypeInfo(json, h.decodedIndex, h.va);
+                            break;
+                        case Il2CppMetadataUsage.kIl2CppMetadataUsageIl2CppType:
+                            AddMetadataUsageIl2CppType(json, h.decodedIndex, h.va);
+                            break;
+                        case Il2CppMetadataUsage.kIl2CppMetadataUsageMethodDef:
+                            AddMetadataUsageMethodDef(json, h.decodedIndex, h.va);
+                            break;
+                        case Il2CppMetadataUsage.kIl2CppMetadataUsageFieldInfo:
+                            AddMetadataUsageFieldInfo(json, h.decodedIndex, h.va);
+                            break;
+                        case Il2CppMetadataUsage.kIl2CppMetadataUsageStringLiteral:
+                            AddMetadataUsageStringLiteral(json, h.decodedIndex, h.va);
+                            break;
+                        case Il2CppMetadataUsage.kIl2CppMetadataUsageMethodRef:
+                            AddMetadataUsageMethodRef(json, h.decodedIndex, h.va);
+                            break;
                     }
                 }
             }
@@ -373,9 +415,13 @@ namespace Il2CppDumper
                 address = $"0x{x.Address:X}"
             }).ToArray();
             var jsonOptions = new JsonSerializerOptions() { WriteIndented = true, IncludeFields = true };
-            File.WriteAllText(outputDir + "stringliteral.json", JsonSerializer.Serialize(stringLiterals, jsonOptions), new UTF8Encoding(false));
+            MainForm.Log("  [struct] writing script.json / stringliteral.json / il2cpp.h...");
+            // Stream JSON directly to disk rather than building one giant in-memory
+            // string. On large or protected binaries these collections can exceed the
+            // ~2 GB single-string/array limit and throw OutOfMemoryException.
+            WriteJsonToFile(outputDir + "stringliteral.json", stringLiterals);
             //写入文件
-            File.WriteAllText(outputDir + "script.json", JsonSerializer.Serialize(json, jsonOptions));
+            WriteJsonToFile(outputDir + "script.json", json);
             //il2cpp.h
             for (int i = 0; i < genericClassList.Count; i++)
             {
@@ -419,10 +465,16 @@ namespace Il2CppDumper
                 case 29:
                 case 29.1:
 				case 31:
+                // Unity 6000.3 metadata (v33/35/38/39) keeps the v29-era binary
+                // runtime struct layout, so the same C header template applies.
+                case 33:
+                case 35:
+                case 38:
+                case 39:
                     sb.Append(HeaderConstants.HeaderV29);
                     break;
                 default:
-                    Console.WriteLine($"WARNING: This il2cpp version [{il2Cpp.Version}] does not support generating .h files");
+                    MainForm.Log($"WARNING: il2cpp version [{il2Cpp.Version}] has no .h template; skipping il2cpp.h (script.json was still written)");
                     return;
             }
             sb.Append(headerStruct);
