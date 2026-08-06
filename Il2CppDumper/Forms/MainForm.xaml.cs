@@ -1,4 +1,4 @@
-﻿using Bluegrams.Application;
+using Bluegrams.Application;
 using Il2CppDumper.Forms;
 using Il2CppDumper.Properties;
 using Il2CppDumper.Utils;
@@ -28,6 +28,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shell;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace Il2CppDumper
 {
@@ -213,6 +214,7 @@ namespace Il2CppDumper
             }
             var version = config.ForceIl2CppVersion ? config.ForceVersion : metadata.Version;
             il2Cpp.SetProperties(version, metadata.metadataUsagesCount);
+            il2Cpp.Metadata = metadata;
             Log($"Il2Cpp Version: {il2Cpp.Version}");
             if (config.ForceDump || il2Cpp.CheckDump())
             {
@@ -302,6 +304,7 @@ namespace Il2CppDumper
 
         private void Dump(Metadata metadata, Il2Cpp il2Cpp, string outputDir)
         {
+            il2Cpp.Metadata = metadata;
             Log("Output path: " + outputDir);
             // Read performance/output options (saved to Settings before the dump task starts).
             var optGenDumpCs = Settings.Default.GenDumpCs;
@@ -700,7 +703,7 @@ namespace Il2CppDumper
                         WebClient w = new WebClient();
                         string remoteVersion = w.DownloadString("https://repo.andnixsh.com/tools/il2cppdumper/version");
 
-                        if (!String.IsNullOrEmpty(remoteVersion))
+                        if (!string.IsNullOrEmpty(remoteVersion))
                         {
                             Version currentVersion = Version.Parse(appVersion);
                             Version latestVersion = Version.Parse(remoteVersion);
@@ -740,7 +743,7 @@ namespace Il2CppDumper
         //Color list /*http://www.flounder.com/csharp_color_table.htm*/
         public void Log(string text, SolidColorBrush color = null)
         {
-            if (!String.IsNullOrEmpty(text))
+            if (!string.IsNullOrEmpty(text))
             {
                 Debug.WriteLine(text);
 

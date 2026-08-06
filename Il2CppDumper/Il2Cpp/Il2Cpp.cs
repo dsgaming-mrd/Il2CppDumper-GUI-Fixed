@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -7,6 +7,7 @@ namespace Il2CppDumper
 {
     public abstract class Il2Cpp : BinaryStream
     {
+        public Metadata Metadata;
         private Il2CppMetadataRegistration pMetadataRegistration;
         private Il2CppCodeRegistration pCodeRegistration;
         public ulong[] methodPointers;
@@ -52,7 +53,7 @@ namespace Il2CppDumper
         {
             if (codeRegistration != 0)
             {
-			    var limit = this is WebAssemblyMemory ? 0x35000u : 0x50000u; //TODO
+                var limit = this is WebAssemblyMemory ? 0x35000u : 0x50000u; //TODO
                 if (Version >= 24.2)
                 {
                     pCodeRegistration = MapVATR<Il2CppCodeRegistration>(codeRegistration);
@@ -68,7 +69,7 @@ namespace Il2CppDumper
                         else if (Version == 31)
                         {
                             Version = 29;
-                            Console.WriteLine($"Change il2cpp version to: {Version}");
+                            MainForm.Log($"Change il2cpp version to: {Version}");
                         }
                     }
                     if (Version == 29)
@@ -77,7 +78,7 @@ namespace Il2CppDumper
                         {
                             Version = 29.1;
                             codeRegistration -= PointerSize * 2;
-                            Console.WriteLine($"Change il2cpp version to: {Version}");
+                            MainForm.Log($"Change il2cpp version to: {Version}");
                         }
                     }
                     if (Version == 27)
@@ -142,7 +143,7 @@ namespace Il2CppDumper
                         if (rgctxs.All(x => x.data.rgctxDataDummy > limit))
                         {
                             Version = 27.2;
-                            Console.WriteLine($"Change il2cpp version to: {Version}");
+                            MainForm.Log($"Change il2cpp version to: {Version}");
                         }
                         break;
                     }
@@ -199,7 +200,7 @@ namespace Il2CppDumper
             for (var i = 0; i < pMetadataRegistration.typesCount; ++i)
             {
                 types[i] = MapVATR<Il2CppType>(pTypes[i]);
-                 types[i].Init(Version);
+                types[i].Init(Version);
                 typeDic.Add(pTypes[i], types[i]);
             }
             if (Version >= 24.2)
@@ -268,7 +269,7 @@ namespace Il2CppDumper
         {
             return ReadClassArray<T>(MapVATR(addr), count);
         }
-		
+
         public T[] MapVATR<T>(ulong addr, long count) where T : new()
         {
             return ReadClassArray<T>(MapVATR(addr), count);
@@ -294,16 +295,68 @@ namespace Il2CppDumper
                 }
                 if (offset > 0)
                 {
-                    if (isValueType && !isStatic)
+                    return offset;
+                }
+                else if (offset <= 0 && Metadata != null && typeIndex >= 0 && typeIndex < Metadata.typeDefs.Length)
+                {
+                    var typeDef = Metadata.typeDefs[typeIndex];
+                    int runningOffset = 0;
+                    if (!isStatic)
                     {
-                        if (Is32Bit)
+                        runningOffset = typeDef.IsValueType ? 0 : (Is32Bit ? 8 : 16);
+                    }
+
+                    for (int fIdx = 0; fIdx <= fieldIndexInType; fIdx++)
+                    {
+                        int currentGlobalFieldIdx = typeDef.fieldStart + fIdx;
+                        if (currentGlobalFieldIdx >= Metadata.fieldDefs.Length)
+                            break;
+
+                        var fDef = Metadata.fieldDefs[currentGlobalFieldIdx];
+                        var fType = types[fDef.typeIndex];
+
+                        bool fIsStatic = (fType.attrs & 0x0010) != 0;
+                        bool fIsLiteral = (fType.attrs & 0x0040) != 0;
+                        if (isStatic)
                         {
-                            offset -= 8;
+                            if (!fIsStatic || fIsLiteral)
+                            {
+                                if (fIdx == fieldIndexInType)
+                                {
+                                    return 0;
+                                }
+                                continue;
+                            }
                         }
                         else
                         {
-                            offset -= 16;
+                            if (fIsStatic || fIsLiteral)
+                            {
+                                if (fIdx == fieldIndexInType)
+                                {
+                                    return 0;
+                                }
+                                continue;
+                            }
                         }
+
+                        GetFieldSizeAndAlignment(fType, out int fSize, out int fAlign);
+
+                        if (fAlign > 0)
+                        {
+                            int remainder = runningOffset % fAlign;
+                            if (remainder != 0)
+                            {
+                                runningOffset += (fAlign - remainder);
+                            }
+                        }
+
+                        if (fIdx == fieldIndexInType)
+                        {
+                            return runningOffset;
+                        }
+
+                        runningOffset += fSize;
                     }
                 }
                 return offset;
@@ -312,6 +365,161 @@ namespace Il2CppDumper
             {
                 return -1;
             }
+        }
+
+        private void GetFieldSizeAndAlignment(Il2CppType fieldType, out int size, out int align)
+        {
+            int ptrSize = Is32Bit ? 4 : 8;
+
+            switch (fieldType.type)
+            {
+                case Il2CppTypeEnum.IL2CPP_TYPE_VOID:
+                    size = 0;
+                    align = 1;
+                    break;
+                case Il2CppTypeEnum.IL2CPP_TYPE_BOOLEAN:
+                case Il2CppTypeEnum.IL2CPP_TYPE_I1:
+                case Il2CppTypeEnum.IL2CPP_TYPE_U1:
+                    size = 1;
+                    align = 1;
+                    break;
+                case Il2CppTypeEnum.IL2CPP_TYPE_I2:
+                case Il2CppTypeEnum.IL2CPP_TYPE_U2:
+                case Il2CppTypeEnum.IL2CPP_TYPE_CHAR:
+                    size = 2;
+                    align = 2;
+                    break;
+                case Il2CppTypeEnum.IL2CPP_TYPE_I4:
+                case Il2CppTypeEnum.IL2CPP_TYPE_U4:
+                case Il2CppTypeEnum.IL2CPP_TYPE_R4:
+                    size = 4;
+                    align = 4;
+                    break;
+                case Il2CppTypeEnum.IL2CPP_TYPE_I8:
+                case Il2CppTypeEnum.IL2CPP_TYPE_U8:
+                case Il2CppTypeEnum.IL2CPP_TYPE_R8:
+                    size = 8;
+                    align = 8;
+                    break;
+                case Il2CppTypeEnum.IL2CPP_TYPE_I:
+                case Il2CppTypeEnum.IL2CPP_TYPE_U:
+                case Il2CppTypeEnum.IL2CPP_TYPE_STRING:
+                case Il2CppTypeEnum.IL2CPP_TYPE_PTR:
+                case Il2CppTypeEnum.IL2CPP_TYPE_BYREF:
+                case Il2CppTypeEnum.IL2CPP_TYPE_CLASS:
+                case Il2CppTypeEnum.IL2CPP_TYPE_OBJECT:
+                case Il2CppTypeEnum.IL2CPP_TYPE_SZARRAY:
+                case Il2CppTypeEnum.IL2CPP_TYPE_ARRAY:
+                case Il2CppTypeEnum.IL2CPP_TYPE_FNPTR:
+                case Il2CppTypeEnum.IL2CPP_TYPE_VAR:
+                case Il2CppTypeEnum.IL2CPP_TYPE_MVAR:
+                    size = ptrSize;
+                    align = ptrSize;
+                    break;
+                case Il2CppTypeEnum.IL2CPP_TYPE_GENERICINST:
+                    if (fieldType.valuetype == 1)
+                    {
+                        size = ptrSize * 2;
+                        align = ptrSize;
+                    }
+                    else
+                    {
+                        size = ptrSize;
+                        align = ptrSize;
+                    }
+                    break;
+                case Il2CppTypeEnum.IL2CPP_TYPE_VALUETYPE:
+                    long structTypeIndex = fieldType.data.klassIndex;
+                    if (Metadata != null && structTypeIndex >= 0 && structTypeIndex < Metadata.typeDefs.Length)
+                    {
+                        GetStructSizeAndAlignment(structTypeIndex, out size, out align);
+                    }
+                    else
+                    {
+                        size = ptrSize * 2;
+                        align = ptrSize;
+                    }
+                    break;
+                default:
+                    size = ptrSize;
+                    align = ptrSize;
+                    break;
+            }
+        }
+
+        private void GetStructSizeAndAlignment(long typeIndex, out int size, out int align)
+        {
+            size = 0;
+            align = 1;
+            int ptrSize = Is32Bit ? 4 : 8;
+
+            if (Metadata == null || typeIndex < 0 || typeIndex >= Metadata.typeDefs.Length)
+            {
+                size = ptrSize * 2;
+                align = ptrSize;
+                return;
+            }
+
+            var typeDef = Metadata.typeDefs[typeIndex];
+
+            if (typeDef.IsEnum)
+            {
+                for (int i = 0; i < typeDef.field_count; i++)
+                {
+                    int currentGlobalFieldIdx = typeDef.fieldStart + i;
+                    if (currentGlobalFieldIdx >= Metadata.fieldDefs.Length)
+                        break;
+                    var fDef = Metadata.fieldDefs[currentGlobalFieldIdx];
+                    var fType = types[fDef.typeIndex];
+                    bool fIsStatic = (fType.attrs & 0x0010) != 0;
+                    if (!fIsStatic)
+                    {
+                        GetFieldSizeAndAlignment(fType, out size, out align);
+                        return;
+                    }
+                }
+                size = 4;
+                align = 4;
+                return;
+            }
+
+            int runningOffset = 0;
+            int maxAlign = 1;
+
+            for (int i = 0; i < typeDef.field_count; i++)
+            {
+                int currentGlobalFieldIdx = typeDef.fieldStart + i;
+                if (currentGlobalFieldIdx >= Metadata.fieldDefs.Length)
+                    break;
+                var fDef = Metadata.fieldDefs[currentGlobalFieldIdx];
+                var fType = types[fDef.typeIndex];
+                bool fIsStatic = (fType.attrs & 0x0010) != 0;
+                bool fIsLiteral = (fType.attrs & 0x0040) != 0;
+                if (fIsStatic || fIsLiteral)
+                    continue;
+
+                GetFieldSizeAndAlignment(fType, out int fSize, out int fAlign);
+
+                if (fAlign > maxAlign)
+                    maxAlign = fAlign;
+
+                int remainder = runningOffset % fAlign;
+                if (remainder != 0)
+                {
+                    runningOffset += (fAlign - remainder);
+                }
+
+                runningOffset += fSize;
+            }
+
+            int finalRemainder = runningOffset % maxAlign;
+            if (finalRemainder != 0)
+            {
+                runningOffset += (maxAlign - finalRemainder);
+            }
+
+            size = runningOffset;
+            align = maxAlign;
         }
 
         public Il2CppType GetIl2CppType(ulong pointer)

@@ -56,6 +56,7 @@ namespace Il2CppDumper
             {
                 throw new NotSupportedException($"ERROR: Metadata file supplied is not a supported version[{version}].");
             }
+
             Version = version;
             header = ReadClass<Il2CppGlobalMetadataHeader>(0);
             // Metadata v38+ (Unity 6000.3) uses variable-width table indices whose

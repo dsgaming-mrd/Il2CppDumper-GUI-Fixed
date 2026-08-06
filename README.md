@@ -2,41 +2,40 @@
 
 ![Il2CppDumper GUI](Screenshot.png)
 
-Đây là **Unity Il2CppDumper GUI** mà tôi phát triển dựa trên mã nguồn gốc của **Perfare**.
-Phiên bản này đã được tối ưu và sửa một số lỗi nhỏ để hoạt động tốt hơn với các trò chơi bị lỗi **Metadata**.
+This is a customized **Unity Il2CppDumper GUI** developed based on the original source code by **Perfare**.
 
-✅ Chạy trên **Windows**
-✅ Hỗ trợ cả **Android** và **iOS**
-✅ Giao diện GUI trực quan, dễ sử dụng
-✅ Có thể tạo **struct**, **dummy dll**, và xuất ra script cho IDA/Ghidra/Hopper
+✅ Runs on **Windows**
+✅ Supports both **Android** and **iOS**
+✅ Intuitive and user-friendly GUI
+✅ Generates **structs**, **dummy DLLs**, and exports scripts for IDA Pro, Ghidra, and Hopper
 
 ---
 
-## 🚀 Cách sử dụng
+## 🚀 How to Use
 
-1. Chuẩn bị file:
-   - `libil2cpp.so` (Android) hoặc `file Executable chính của game` (iOS)
+1. **Prepare your files:**
+   - `libil2cpp.so` (Android) or `UnityFramework` / the main game `Executable` (iOS)
    - `global-metadata.dat`
 
-2. Chạy `Il2CppDumper GUI`
+2. Run `Il2CppDumper GUI`.
 
-3. Chọn:
-   - **Executable file** → trỏ tới `libil2cpp.so` hoặc `file Executable chính của game`
-   - **global-metadata.dat** → trỏ tới metadata của game
-   - **Output directory** → chọn thư mục để lưu kết quả
+3. **Select your paths:**
+   - **Executable file** → Point to your `libil2cpp.so`, `UnityFramework`, or the main game `Executable`.
+   - **global-metadata.dat** → Point to the game's metadata file.
+   - **Output directory** → Choose the folder where you want to save the dumped results.
 
-4. Nhấn **Start** → tool sẽ tự động:
-   - Dump dữ liệu
-   - Sinh struct
-   - Sinh dummy dll
-   - Copy script hỗ trợ phân tích vào thư mục output
+4. Click **Start**. The tool will automatically:
+   - Dump the binary data
+   - Generate C# structures (`structs`)
+   - Generate dummy DLLs
+   - Copy analysis scripts to the output directory
 
-5. Mở file `dump.cs` hoặc dummy dll bằng **dnSpy/ILSpy** để phân tích.
+5. Open the generated `dump.cs` or DummyDLL using **dnSpy** or **ILSpy** to begin your analysis.
 
 ---
 
 ## 🙏 Credits
 
-- **[Perfare](https://github.com/Perfare)** – Tác giả gốc của Il2CppDumper
-- **[AndnixSH](https://github.com/AndnixSH)** – Tác giả GUI phiên bản trước
-- **[Mr D - DS Gaming](https://github.com/dsgaming-mrd)** – Phát triển bản tùy biến GUI (Android/iOS)
+- **[Perfare](https://github.com/Perfare)** – Original author of Il2CppDumper
+- **[AndnixSH](https://github.com/AndnixSH)** – Developer of the previous GUI version
+- **[Mr D - DS Gaming](https://github.com/dsgaming-mrd)** – Maintained and Enhanced GUI Edition
