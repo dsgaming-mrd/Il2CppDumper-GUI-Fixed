@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 	<PropertyGroup>
-		<TargetFramework>net8.0-windows</TargetFramework>
+		<TargetFramework>net10.0-windows</TargetFramework>
 		<OutputType>WinExe</OutputType>
 		<AssemblyName>Il2CppDumper GUI</AssemblyName>
 		<MapFileExtensions>true</MapFileExtensions>
@@ -32,7 +32,7 @@
 	<PropertyGroup>
 	  <PackageProjectUrl>https://github.com/AndnixSH/Il2CppDumper-GUI</PackageProjectUrl>
 	  <RepositoryUrl>https://github.com/AndnixSH/Il2CppDumper-GUI</RepositoryUrl>
-	  <Version>3.1.0</Version>
+	  <Version>3.2.0</Version>
 	  <AssemblyVersion>$(PackageVersion)</AssemblyVersion>
 	</PropertyGroup>
 	<PropertyGroup>
@@ -92,6 +92,11 @@
 			<ExcludeFromSingleFile>true</ExcludeFromSingleFile>
 		</None>
 		<None Update="il2cpp_header_to_ghidra.py">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToPublishDirectory>Always</CopyToPublishDirectory>
+			<ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+		</None>
+		<None Update="ida_with_struct_py2-3  - IDA 9.3.py">
 			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
 			<CopyToPublishDirectory>Always</CopyToPublishDirectory>
 			<ExcludeFromSingleFile>true</ExcludeFromSingleFile>

@@ -51,8 +51,11 @@ namespace Il2CppDumper
             {
                 var str = AttributeDataToString(ReadAttributeDataValue());
                 (var declaring, var propertyIndex) = ReadCustomAttributeNamedArgumentClassAndIndex(typeDef);
-                var propertyDef = metadata.propertyDefs[declaring.propertyStart + propertyIndex];
-                argList.Add($"{metadata.GetStringFromIndex(propertyDef.nameIndex)} = {str}");
+                if (declaring != null && declaring.propertyStart + propertyIndex >= 0 && declaring.propertyStart + propertyIndex < metadata.propertyDefs.Length)
+                {
+                    var propertyDef = metadata.propertyDefs[declaring.propertyStart + propertyIndex];
+                    argList.Add($"{metadata.GetStringFromIndex(propertyDef.nameIndex)} = {str}");
+                }
             }
             dataBuffer = BaseStream.Position;
 

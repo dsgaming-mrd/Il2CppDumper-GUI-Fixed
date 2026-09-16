@@ -274,9 +274,9 @@ namespace Il2CppDumper
             var pointer = ReadUInt64();
             if (pointer > vmaddr + 0xFFFFFFFF)
             {
-                var addr = Position;
-                var section = sections.First(x => addr >= x.offset && addr <= x.offset + x.size);
-                if (section.sectname == "__const" || section.sectname == "__data")
+                var addr = Position - 8;
+                var section = sections.FirstOrDefault(x => addr >= x.offset && addr <= x.offset + x.size);
+                if (section != null && (section.sectname == "__const" || section.sectname == "__data"))
                 {
                     var rva = pointer - vmaddr;
                     rva &= 0xFFFFFFFF;

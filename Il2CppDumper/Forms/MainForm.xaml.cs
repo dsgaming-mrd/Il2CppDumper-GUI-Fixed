@@ -1,4 +1,4 @@
-using Bluegrams.Application;
+﻿using Bluegrams.Application;
 using Il2CppDumper.Forms;
 using Il2CppDumper.Properties;
 using Il2CppDumper.Utils;
@@ -28,7 +28,6 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Navigation;
 using System.Windows.Shell;
-using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace Il2CppDumper
 {
@@ -36,6 +35,8 @@ namespace Il2CppDumper
     {
         private static Config config;
         public static MainForm main { get; private set; }
+        // Elapsed time of the running dump, shown as [mm:ss.fff] in front of every log line.
+        private static readonly Stopwatch dumpTimer = new();
         string appVersion = null;
 
         //string basePath = Path.GetDirectoryName(AppContext.BaseDirectory);
@@ -213,8 +214,7 @@ namespace Il2CppDumper
                     break;
             }
             var version = config.ForceIl2CppVersion ? config.ForceVersion : metadata.Version;
-            il2Cpp.SetProperties(version, metadata.metadataUsagesCount);
-            il2Cpp.Metadata = metadata;
+            il2Cpp.SetProperties(version, metadata.metadataUsagesCount, metadata);
             Log($"Il2Cpp Version: {il2Cpp.Version}");
             if (config.ForceDump || il2Cpp.CheckDump())
             {
@@ -262,7 +262,7 @@ namespace Il2CppDumper
                     {
                         Log("Use custom PE loader");
                         il2Cpp = PELoader.Load(il2cppPath);
-                        il2Cpp.SetProperties(version, metadata.metadataUsagesCount);
+                        il2Cpp.SetProperties(version, metadata.metadataUsagesCount, metadata);
                         flag = il2Cpp.PlusSearch(metadata.methodDefs.Count(x => x.methodIndex >= 0), metadata.typeDefs.Length, metadata.imageDefs.Length);
                     }
                 }
@@ -290,7 +290,10 @@ namespace Il2CppDumper
                 {
                     var typeDef = metadata.typeDefs[0];
                     var il2CppType = il2Cpp.types[typeDef.byvalTypeIndex];
-                    metadata.ImageBase = il2CppType.data.typeHandle - metadata.header.typeDefinitionsOffset;
+                    var typeDefinitionsOffset = metadata.Version >= 38
+                        ? (ulong)metadata.header.typeDefinitions.offset
+                        : metadata.header.typeDefinitionsOffset;
+                    metadata.ImageBase = il2CppType.data.typeHandle - typeDefinitionsOffset;
                 }
             }
             catch (Exception ex)
@@ -304,7 +307,6 @@ namespace Il2CppDumper
 
         private void Dump(Metadata metadata, Il2Cpp il2Cpp, string outputDir)
         {
-            il2Cpp.Metadata = metadata;
             Log("Output path: " + outputDir);
             // Read performance/output options (saved to Settings before the dump task starts).
             var optGenDumpCs = Settings.Default.GenDumpCs;
@@ -344,7 +346,7 @@ namespace Il2CppDumper
                 try
                 {
                     Log("Generating dummy dll...");
-                    DummyAssemblyExporter.Export(executor, outputDir, config.DummyDllAddToken);
+                    DummyAssemblyExporter.Export(executor, outputDir, config.DummyDllAddToken, optWorkerThreads);
                     Log("Done!", Brushes.Chartreuse);
                 }
                 catch (Exception ex)
@@ -665,7 +667,8 @@ namespace Il2CppDumper
                     (Settings.Default.ida_with_struct, "ida_with_struct.py"),
                     (Settings.Default.ida_with_struct_py3, "ida_with_struct_py3.py"),
                     (Settings.Default.il2cpp_header_to_binja, "il2cpp_header_to_binja.py"),
-                    (Settings.Default.il2cpp_header_to_ghidra, "il2cpp_header_to_ghidra.py")
+                    (Settings.Default.il2cpp_header_to_ghidra, "il2cpp_header_to_ghidra.py"),
+                    (true, "ida_with_struct_py2-3  - IDA 9.3.py")
                 };
 
                 foreach (var fileSetting in fileSettings)
@@ -703,7 +706,7 @@ namespace Il2CppDumper
                         WebClient w = new WebClient();
                         string remoteVersion = w.DownloadString("https://repo.andnixsh.com/tools/il2cppdumper/version");
 
-                        if (!string.IsNullOrEmpty(remoteVersion))
+                        if (!String.IsNullOrEmpty(remoteVersion))
                         {
                             Version currentVersion = Version.Parse(appVersion);
                             Version latestVersion = Version.Parse(remoteVersion);
@@ -732,19 +735,30 @@ namespace Il2CppDumper
         #region Logging
         public static void Log(string text)
         {
-            main.Log(text);
+            if (main != null)
+                main.Log(text);
+            else
+                Console.WriteLine(text);
         }
 
         public static void Log(string text, object text2)
         {
-            main.Log(string.Format(text, text2));
+            if (main != null)
+                main.Log(string.Format(text, text2));
+            else
+                Console.WriteLine(string.Format(text, text2));
         }
 
         //Color list /*http://www.flounder.com/csharp_color_table.htm*/
         public void Log(string text, SolidColorBrush color = null)
         {
-            if (!string.IsNullOrEmpty(text))
+            if (!String.IsNullOrEmpty(text))
             {
+                if (dumpTimer.IsRunning)
+                {
+                    var elapsed = dumpTimer.Elapsed;
+                    text = $"[{(int)elapsed.TotalMinutes:00}:{elapsed.Seconds:00}.{elapsed.Milliseconds:000}] {text}";
+                }
                 Debug.WriteLine(text);
 
                 if (!Dispatcher.CheckAccess())
@@ -894,6 +908,7 @@ namespace Il2CppDumper
         {
             SaveConfig();
             LogBox.Document.Blocks.Clear();
+            dumpTimer.Restart();
             if (!Directory.Exists(outputTxtBox.Text))
             {
                 Log("Output directory does not exist", Brushes.Orange);
@@ -927,6 +942,7 @@ namespace Il2CppDumper
                 Dumper(binFile, datFile, outputPath);
             });
 
+            dumpTimer.Stop();
             ActionButtonsEnabled = true;
         }
 
@@ -1075,6 +1091,7 @@ namespace Il2CppDumper
             startBtn.BorderBrush = null;
             ActionButtonsEnabled = false;
             LogBox.Document.Blocks.Clear();
+            dumpTimer.Restart();
             SaveConfig();
             string[] files = e.GetFilesDrop();
             foreach (var file in files)
@@ -1110,6 +1127,7 @@ namespace Il2CppDumper
                 if (Settings.Default.AutoSetDir)
                     outputTxtBox.Text = Path.GetDirectoryName(file) + "\\";
             }
+            dumpTimer.Stop();
             ActionButtonsEnabled = true;
         }
         #endregion

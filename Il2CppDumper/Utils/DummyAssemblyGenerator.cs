@@ -16,14 +16,20 @@ namespace Il2CppDumper
         private readonly Metadata metadata;
         private readonly Il2Cpp il2Cpp;
         private readonly Dictionary<Il2CppTypeDefinition, TypeDefinition> typeDefinitionDic = new();
+        private readonly Dictionary<Il2CppTypeDefinition, ModuleDefinition> typeModuleDic = new();
+        private readonly Dictionary<ModuleDefinition, Dictionary<MemberReference, MemberReference>> importCache = new();
         private readonly Dictionary<Il2CppGenericParameter, GenericParameter> genericParameterDic = new();
         private readonly MethodDefinition attributeAttribute;
         private readonly TypeReference stringType;
+        private readonly TypeReference systemEnumType;
+        private readonly TypeReference systemTypeType;
         private readonly TypeSystem typeSystem;
         private readonly Dictionary<int, FieldDefinition> fieldDefinitionDic = new();
         private readonly Dictionary<int, PropertyDefinition> propertyDefinitionDic = new();
         private readonly Dictionary<int, MethodDefinition> methodDefinitionDic = new();
 
+        private int attributeRestoreErrorFirst = -1;
+        private int attributeRestoreErrorLast = -1;
         public DummyAssemblyGenerator(Il2CppExecutor il2CppExecutor, bool addToken)
         {
             executor = il2CppExecutor;
@@ -41,6 +47,11 @@ namespace Il2CppDumper
             var tokenAttribute = dummyMD.Types.First(x => x.Name == "TokenAttribute").Methods[0];
             stringType = dummyMD.TypeSystem.String;
             typeSystem = dummyMD.TypeSystem;
+            // System.Enum and System.Type are not part of Cecil's TypeSystem. Build
+            // them against the same core library the primitives use, so the dummy
+            // DLLs never reference the core library of the runtime running the dumper.
+            systemEnumType = new TypeReference("System", "Enum", dummyMD, typeSystem.CoreLibrary);
+            systemTypeType = new TypeReference("System", "Type", dummyMD, typeSystem.CoreLibrary);
 
             var resolver = new MyAssemblyResolver();
             var moduleParameters = new ModuleParameters
@@ -57,17 +68,29 @@ namespace Il2CppDumper
             foreach (var imageDef in metadata.imageDefs)
             {
                 var imageName = metadata.GetStringFromIndex(imageDef.nameIndex);
-                var aname = metadata.assemblyDefs[imageDef.assemblyIndex].aname;
-                var assemblyName = metadata.GetStringFromIndex(aname.nameIndex);
+                if (string.IsNullOrWhiteSpace(imageName))
+                {
+                    imageName = $"Image_{Assemblies.Count}.dll";
+                }
+                var aname = imageDef.assemblyIndex >= 0 && imageDef.assemblyIndex < metadata.assemblyDefs.Length
+                    ? metadata.assemblyDefs[imageDef.assemblyIndex].aname
+                    : new Il2CppAssemblyNameDefinition();
+                var metadataAssemblyName = metadata.GetStringFromIndex(aname.nameIndex);
+                var imageAssemblyName = Path.GetFileNameWithoutExtension(imageName);
+                var assemblyName = !string.IsNullOrWhiteSpace(imageAssemblyName) ? imageAssemblyName : metadataAssemblyName;
+                if (string.IsNullOrWhiteSpace(assemblyName))
+                {
+                    assemblyName = $"Assembly_{Assemblies.Count}";
+                }
+                var useMetadataAssemblyInfo = string.Equals(metadataAssemblyName, assemblyName, StringComparison.OrdinalIgnoreCase);
                 Version vers;
-                if (aname.build >= 0)
+                if (useMetadataAssemblyInfo && aname.major >= 0 && aname.minor >= 0 && aname.build >= 0 && aname.revision >= 0)
                 {
                     vers = new Version(aname.major, aname.minor, aname.build, aname.revision);
                 }
                 else
                 {
-                    //__Generated
-                    vers = new Version(3, 7, 1, 6);
+                    vers = new Version(0, 0, 0, 0);
                 }
                 var assemblyNameDef = new AssemblyNameDefinition(assemblyName, vers);
                 /*assemblyNameDef.Culture = metadata.GetStringFromIndex(aname.cultureIndex);
@@ -88,6 +111,7 @@ namespace Il2CppDumper
                     var typeName = metadata.GetStringFromIndex(typeDef.nameIndex);
                     var typeDefinition = new TypeDefinition(namespaceName, typeName, (TypeAttributes)typeDef.flags);
                     typeDefinitionDic.Add(typeDef, typeDefinition);
+                    typeModuleDic[typeDef] = moduleDefinition;
                     if (typeDef.declaringTypeIndex == -1)
                     {
                         moduleDefinition.Types.Add(typeDefinition);
@@ -105,11 +129,34 @@ namespace Il2CppDumper
                     //nestedtype
                     for (int i = 0; i < typeDef.nested_type_count; i++)
                     {
-                        var nestedIndex = metadata.nestedTypeIndices[typeDef.nestedTypesStart + i];
+                        var nestedTypeIndex = typeDef.nestedTypesStart + i;
+                        if (nestedTypeIndex < 0 || nestedTypeIndex >= metadata.nestedTypeIndices.Length)
+                        {
+                            continue;
+                        }
+                        var nestedIndex = metadata.nestedTypeIndices[nestedTypeIndex];
+                        if (nestedIndex < 0 || nestedIndex >= metadata.typeDefs.Length)
+                        {
+                            continue;
+                        }
                         var nestedTypeDef = metadata.typeDefs[nestedIndex];
+                        // A nested type always lives in the image of its declaring
+                        // type; a mismatch means a bad index, and attaching it would
+                        // make one type definition reachable from two modules.
+                        if (!typeModuleDic.TryGetValue(nestedTypeDef, out var nestedModule) || nestedModule != typeDefinition.Module)
+                        {
+                            continue;
+                        }
                         var nestedTypeDefinition = typeDefinitionDic[nestedTypeDef];
-                        typeDefinition.NestedTypes.Add(nestedTypeDefinition);
+                        AttachNestedType(typeDefinition, nestedTypeDefinition);
                     }
+                }
+            }
+            foreach (var pair in typeDefinitionDic)
+            {
+                if (pair.Value.Module == null && typeModuleDic.TryGetValue(pair.Key, out var moduleDefinition))
+                {
+                    moduleDefinition.Types.Add(pair.Value);
                 }
             }
             //提前处理
@@ -123,7 +170,7 @@ namespace Il2CppDumper
 
                     if (addToken)
                     {
-                        var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
+                        var customTokenAttribute = new CustomAttribute(Import(typeDefinition.Module, tokenAttribute));
                         customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{typeDef.token:X}")));
                         typeDefinition.CustomAttributes.Add(customTokenAttribute);
                     }
@@ -142,11 +189,20 @@ namespace Il2CppDumper
                     }
 
                     //parent
-                    if (typeDef.parentIndex >= 0)
+                    if (typeDef.parentIndex >= 0 && !typeDef.IsEnum)
                     {
                         var parentType = il2Cpp.types[typeDef.parentIndex];
                         var parentTypeRef = GetTypeReference(typeDefinition, parentType);
                         typeDefinition.BaseType = parentTypeRef;
+                    }
+
+                    // Cecil identifies an enum by System.Enum as its BaseType.
+                    // Do this AFTER the normal parent assignment so an IL2CPP
+                    // underlying primitive such as int cannot overwrite it.
+                    if (typeDef.IsEnum)
+                    {
+                        typeDefinition.BaseType =
+                            Import(typeDefinition.Module, systemEnumType);
                     }
 
                     //interfaces
@@ -175,14 +231,51 @@ namespace Il2CppDumper
                         var fieldDef = metadata.fieldDefs[i];
                         var fieldType = il2Cpp.types[fieldDef.typeIndex];
                         var fieldName = metadata.GetStringFromIndex(fieldDef.nameIndex);
-                        var fieldTypeRef = GetTypeReference(typeDefinition, fieldType);
-                        var fieldDefinition = new FieldDefinition(fieldName, (FieldAttributes)fieldType.attrs, fieldTypeRef);
+
+                        TypeReference fieldTypeRef;
+                        FieldAttributes fieldAttributes;
+
+                        if (typeDef.IsEnum)
+                        {
+                            if (fieldName == "value__")
+                            {
+                                // value__ must use the primitive underlying type.
+                                fieldTypeRef = GetTypeReference(typeDefinition, fieldType);
+                                fieldAttributes =
+                                    FieldAttributes.Private |
+                                    FieldAttributes.SpecialName |
+                                    FieldAttributes.RTSpecialName;
+                            }
+                            else
+                            {
+                                // IMPORTANT:
+                                // Cecil enum literal fields are stored with the
+                                // UNDERLYING primitive field type (int, byte, etc.),
+                                // not the enum TypeDefinition itself.
+                                fieldTypeRef = GetEnumUnderlyingType(typeDefinition, typeDef);
+
+                                fieldAttributes =
+                                    FieldAttributes.Public |
+                                    FieldAttributes.Static |
+                                    FieldAttributes.Literal |
+                                    FieldAttributes.HasDefault;
+                            }
+                        }
+                        else
+                        {
+                            fieldTypeRef = GetTypeReference(typeDefinition, fieldType);
+                            fieldAttributes = (FieldAttributes)fieldType.attrs;
+                        }
+
+                        var fieldDefinition =
+                            new FieldDefinition(fieldName, fieldAttributes, fieldTypeRef);
+
                         typeDefinition.Fields.Add(fieldDefinition);
                         fieldDefinitionDic.Add(i, fieldDefinition);
 
                         if (addToken)
                         {
-                            var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
+                            var customTokenAttribute = new CustomAttribute(Import(typeDefinition.Module, tokenAttribute));
                             customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{fieldDef.token:X}")));
                             fieldDefinition.CustomAttributes.Add(customTokenAttribute);
                         }
@@ -192,14 +285,28 @@ namespace Il2CppDumper
                         {
                             if (executor.TryGetDefaultValue(fieldDefault.typeIndex, fieldDefault.dataIndex, out var value))
                             {
-                                fieldDefinition.Constant = value;
+                                if (typeDef.IsEnum && fieldName != "value__")
+                                {
+                                    // The enum literal FieldType is the underlying
+                                    // primitive, so Cecil can serialize the constant.
+                                    fieldDefinition.Constant = value;
+                                }
+                                else if (!TrySetConstant(fieldDefinition, fieldDefinition.FieldType, value))
+                                {
+                                    AddMetadataOffsetAttribute(
+                                        typeDefinition.Module,
+                                        metadataOffsetAttribute,
+                                        fieldDefinition.CustomAttributes,
+                                        metadata.GetDefaultValueFromIndex(fieldDefault.dataIndex));
+                                }
                             }
                             else
                             {
-                                var customAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(metadataOffsetAttribute));
-                                var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{value:X}"));
-                                customAttribute.Fields.Add(offset);
-                                fieldDefinition.CustomAttributes.Add(customAttribute);
+                                AddMetadataOffsetAttribute(
+                                    typeDefinition.Module,
+                                    metadataOffsetAttribute,
+                                    fieldDefinition.CustomAttributes,
+                                    metadata.GetDefaultValueFromIndex(fieldDefault.dataIndex));
                             }
                         }
                         //fieldOffset
@@ -208,7 +315,7 @@ namespace Il2CppDumper
                             var fieldOffset = il2Cpp.GetFieldOffsetFromIndex(index, i - typeDef.fieldStart, i, typeDefinition.IsValueType, fieldDefinition.IsStatic);
                             if (fieldOffset >= 0)
                             {
-                                var customAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(fieldOffsetAttribute));
+                                var customAttribute = new CustomAttribute(Import(typeDefinition.Module, fieldOffsetAttribute));
                                 var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{fieldOffset:X}"));
                                 customAttribute.Fields.Add(offset);
                                 fieldDefinition.CustomAttributes.Add(customAttribute);
@@ -216,12 +323,12 @@ namespace Il2CppDumper
                         }
                     }
                     //method
-                    var methodEnd = typeDef.methodStart + typeDef.method_count;
-                    for (var i = typeDef.methodStart; i < methodEnd; ++i)
+                    for (var methodIndexInType = 0; methodIndexInType < typeDef.method_count; methodIndexInType++)
                     {
+                        var i = metadata.GetMethodIndexFromTypeDefinition(index, methodIndexInType);
                         var methodDef = metadata.methodDefs[i];
                         var methodName = metadata.GetStringFromIndex(methodDef.nameIndex);
-                        var methodDefinition = new MethodDefinition(methodName, (MethodAttributes)methodDef.flags, typeDefinition.Module.ImportReference(typeSystem.Void))
+                        var methodDefinition = new MethodDefinition(methodName, (MethodAttributes)methodDef.flags, Import(typeDefinition.Module, typeSystem.Void))
                         {
                             ImplAttributes = (MethodImplAttributes)methodDef.iflags
                         };
@@ -244,7 +351,7 @@ namespace Il2CppDumper
 
                         if (addToken)
                         {
-                            var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
+                            var customTokenAttribute = new CustomAttribute(Import(typeDefinition.Module, tokenAttribute));
                             customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{methodDef.token:X}")));
                             methodDefinition.CustomAttributes.Add(customTokenAttribute);
                         }
@@ -287,14 +394,14 @@ namespace Il2CppDumper
                             {
                                 if (executor.TryGetDefaultValue(parameterDefault.typeIndex, parameterDefault.dataIndex, out var value))
                                 {
-                                    parameterDefinition.Constant = value;
+                                    if (!TrySetConstant(parameterDefinition, parameterDefinition.ParameterType, value))
+                                    {
+                                        AddMetadataOffsetAttribute(typeDefinition.Module, metadataOffsetAttribute, parameterDefinition.CustomAttributes, metadata.GetDefaultValueFromIndex(parameterDefault.dataIndex));
+                                    }
                                 }
                                 else
                                 {
-                                    var customAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(metadataOffsetAttribute));
-                                    var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{value:X}"));
-                                    customAttribute.Fields.Add(offset);
-                                    parameterDefinition.CustomAttributes.Add(customAttribute);
+                                    AddMetadataOffsetAttribute(typeDefinition.Module, metadataOffsetAttribute, parameterDefinition.CustomAttributes, (uint)value);
                                 }
                             }
                         }
@@ -304,7 +411,7 @@ namespace Il2CppDumper
                             var methodPointer = il2Cpp.GetMethodPointer(imageName, methodDef);
                             if (methodPointer > 0)
                             {
-                                var customAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(addressAttribute));
+                                var customAttribute = new CustomAttribute(Import(typeDefinition.Module, addressAttribute));
                                 var fixedMethodPointer = il2Cpp.GetRVA(methodPointer);
                                 var rva = new CustomAttributeNamedArgument("RVA", new CustomAttributeArgument(stringType, $"0x{fixedMethodPointer:X}"));
                                 var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{il2Cpp.MapVATR(methodPointer):X}"));
@@ -332,12 +439,12 @@ namespace Il2CppDumper
                         MethodDefinition SetMethod = null;
                         if (propertyDef.get >= 0)
                         {
-                            GetMethod = methodDefinitionDic[typeDef.methodStart + propertyDef.get];
+                            GetMethod = methodDefinitionDic[metadata.GetMethodIndexFromTypeDefinition(index, propertyDef.get)];
                             propertyType = GetMethod.ReturnType;
                         }
                         if (propertyDef.set >= 0)
                         {
-                            SetMethod = methodDefinitionDic[typeDef.methodStart + propertyDef.set];
+                            SetMethod = methodDefinitionDic[metadata.GetMethodIndexFromTypeDefinition(index, propertyDef.set)];
                             propertyType ??= SetMethod.Parameters[0].ParameterType;
                         }
                         var propertyDefinition = new PropertyDefinition(propertyName, (PropertyAttributes)propertyDef.attrs, propertyType)
@@ -350,7 +457,7 @@ namespace Il2CppDumper
 
                         if (addToken)
                         {
-                            var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
+                            var customTokenAttribute = new CustomAttribute(Import(typeDefinition.Module, tokenAttribute));
                             customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{propertyDef.token:X}")));
                             propertyDefinition.CustomAttributes.Add(customTokenAttribute);
                         }
@@ -365,17 +472,17 @@ namespace Il2CppDumper
                         var eventTypeRef = GetTypeReference(typeDefinition, eventType);
                         var eventDefinition = new EventDefinition(eventName, (EventAttributes)eventType.attrs, eventTypeRef);
                         if (eventDef.add >= 0)
-                            eventDefinition.AddMethod = methodDefinitionDic[typeDef.methodStart + eventDef.add];
+                            eventDefinition.AddMethod = methodDefinitionDic[metadata.GetMethodIndexFromTypeDefinition(index, eventDef.add)];
                         if (eventDef.remove >= 0)
-                            eventDefinition.RemoveMethod = methodDefinitionDic[typeDef.methodStart + eventDef.remove];
+                            eventDefinition.RemoveMethod = methodDefinitionDic[metadata.GetMethodIndexFromTypeDefinition(index, eventDef.remove)];
                         if (eventDef.raise >= 0)
-                            eventDefinition.InvokeMethod = methodDefinitionDic[typeDef.methodStart + eventDef.raise];
+                            eventDefinition.InvokeMethod = methodDefinitionDic[metadata.GetMethodIndexFromTypeDefinition(index, eventDef.raise)];
                         typeDefinition.Events.Add(eventDefinition);
                         eventDefinitionDic.Add(i, eventDefinition);
 
                         if (addToken)
                         {
-                            var customTokenAttribute = new CustomAttribute(typeDefinition.Module.ImportReference(tokenAttribute));
+                            var customTokenAttribute = new CustomAttribute(Import(typeDefinition.Module, tokenAttribute));
                             customTokenAttribute.Fields.Add(new CustomAttributeNamedArgument("Token", new CustomAttributeArgument(stringType, $"0x{eventDef.token:X}")));
                             eventDefinition.CustomAttributes.Add(customTokenAttribute);
                         }
@@ -406,9 +513,9 @@ namespace Il2CppDumper
                         }
 
                         //method
-                        var methodEnd = typeDef.methodStart + typeDef.method_count;
-                        for (var i = typeDef.methodStart; i < methodEnd; ++i)
+                        for (var methodIndexInType = 0; methodIndexInType < typeDef.method_count; methodIndexInType++)
                         {
+                            var i = metadata.GetMethodIndexFromTypeDefinition(index, methodIndexInType);
                             var methodDef = metadata.methodDefs[i];
                             var methodDefinition = methodDefinitionDic[i];
                             //methodAttribute
@@ -446,6 +553,148 @@ namespace Il2CppDumper
                     }
                 }
             }
+            PrintAttributeRestoreErrors();
+        }
+
+        private void PrintAttributeRestoreErrors()
+        {
+            if (attributeRestoreErrorFirst >= 0)
+            {
+                MainForm.Log($"WARNING: Failed to restore custom attributes with attributeIndex {attributeRestoreErrorFirst} - {attributeRestoreErrorLast}");
+            }
+        }
+
+        private static void AttachNestedType(TypeDefinition declaringType, TypeDefinition nestedType)
+        {
+            if (declaringType == null || nestedType == null || ReferenceEquals(declaringType, nestedType))
+            {
+                return;
+            }
+            if (nestedType.DeclaringType == declaringType || declaringType.NestedTypes.Contains(nestedType))
+            {
+                return;
+            }
+            if (nestedType.DeclaringType != null)
+            {
+                return;
+            }
+            nestedType.Module?.Types.Remove(nestedType);
+            declaringType.NestedTypes.Add(nestedType);
+        }
+
+        private void AddMetadataOffsetAttribute(ModuleDefinition moduleDefinition, MethodReference metadataOffsetAttribute, Collection<CustomAttribute> customAttributes, uint metadataOffset)
+        {
+            var customAttribute = new CustomAttribute(Import(moduleDefinition, metadataOffsetAttribute));
+            var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{metadataOffset:X}"));
+            customAttribute.Fields.Add(offset);
+            customAttributes.Add(customAttribute);
+        }
+
+        private static bool TrySetConstant(FieldDefinition fieldDefinition, TypeReference typeReference, object value)
+        {
+            if (!CanWriteConstant(typeReference))
+            {
+                return false;
+            }
+            fieldDefinition.Constant = value;
+            return true;
+        }
+
+        private static bool TrySetConstant(ParameterDefinition parameterDefinition, TypeReference typeReference, object value)
+        {
+            if (!CanWriteConstant(typeReference))
+            {
+                return false;
+            }
+            parameterDefinition.Constant = value;
+            return true;
+        }
+
+        private static bool CanWriteConstant(TypeReference typeReference)
+        {
+            if (typeReference == null)
+            {
+                return false;
+            }
+            if (IsPrimitiveConstantType(typeReference.FullName))
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private static bool IsPrimitiveConstantType(string fullName)
+        {
+            return fullName is "System.Boolean"
+                or "System.Char"
+                or "System.SByte"
+                or "System.Byte"
+                or "System.Int16"
+                or "System.UInt16"
+                or "System.Int32"
+                or "System.UInt32"
+                or "System.Int64"
+                or "System.UInt64"
+                or "System.Single"
+                or "System.Double"
+                or "System.String";
+        }
+
+        private TypeReference GetEnumUnderlyingType(TypeDefinition enumTypeDefinition, Il2CppTypeDefinition typeDef)
+        {
+            var fieldEnd = typeDef.fieldStart + typeDef.field_count;
+
+            for (var i = typeDef.fieldStart; i < fieldEnd; i++)
+            {
+                var fieldDef = metadata.fieldDefs[i];
+                var fieldName = metadata.GetStringFromIndex(fieldDef.nameIndex);
+
+                if (fieldName == "value__")
+                {
+                    // The value__ field is the authoritative underlying enum type.
+                    return GetTypeReference(
+                        enumTypeDefinition,
+                        il2Cpp.types[fieldDef.typeIndex]);
+                }
+            }
+
+            // IL2CPP normally uses Int32 when no explicit value__ field can be found.
+            return enumTypeDefinition.Module.TypeSystem.Int32;
+        }
+
+        // Cecil builds a fresh reference (and scans the module's assembly references)
+        // on every ImportReference call. The same few definitions are imported for
+        // hundreds of thousands of members, so keep one imported reference per module.
+        private TypeReference Import(ModuleDefinition module, TypeReference type)
+        {
+            var cache = GetImportCache(module);
+            if (!cache.TryGetValue(type, out var imported))
+            {
+                imported = module.ImportReference(type);
+                cache.Add(type, imported);
+            }
+            return (TypeReference)imported;
+        }
+
+        private MethodReference Import(ModuleDefinition module, MethodReference method)
+        {
+            var cache = GetImportCache(module);
+            if (!cache.TryGetValue(method, out var imported))
+            {
+                imported = module.ImportReference(method);
+                cache.Add(method, imported);
+            }
+            return (MethodReference)imported;
+        }
+
+        private Dictionary<MemberReference, MemberReference> GetImportCache(ModuleDefinition module)
+        {
+            if (!importCache.TryGetValue(module, out var cache))
+            {
+                cache = new Dictionary<MemberReference, MemberReference>();
+                importCache.Add(module, cache);
+            }
+            return cache;
         }
 
         private TypeReference GetTypeReferenceWithByRef(MemberReference memberReference, Il2CppType il2CppType)
@@ -467,47 +716,53 @@ namespace Il2CppDumper
             switch (il2CppType.type)
             {
                 case Il2CppTypeEnum.IL2CPP_TYPE_OBJECT:
-                    return moduleDefinition.ImportReference(typeSystem.Object);
+                    return Import(moduleDefinition, typeSystem.Object);
                 case Il2CppTypeEnum.IL2CPP_TYPE_VOID:
-                    return moduleDefinition.ImportReference(typeSystem.Void);
+                    return Import(moduleDefinition, typeSystem.Void);
                 case Il2CppTypeEnum.IL2CPP_TYPE_BOOLEAN:
-                    return moduleDefinition.ImportReference(typeSystem.Boolean);
+                    return Import(moduleDefinition, typeSystem.Boolean);
                 case Il2CppTypeEnum.IL2CPP_TYPE_CHAR:
-                    return moduleDefinition.ImportReference(typeSystem.Char);
+                    return Import(moduleDefinition, typeSystem.Char);
                 case Il2CppTypeEnum.IL2CPP_TYPE_I1:
-                    return moduleDefinition.ImportReference(typeSystem.SByte);
+                    return Import(moduleDefinition, typeSystem.SByte);
                 case Il2CppTypeEnum.IL2CPP_TYPE_U1:
-                    return moduleDefinition.ImportReference(typeSystem.Byte);
+                    return Import(moduleDefinition, typeSystem.Byte);
                 case Il2CppTypeEnum.IL2CPP_TYPE_I2:
-                    return moduleDefinition.ImportReference(typeSystem.Int16);
+                    return Import(moduleDefinition, typeSystem.Int16);
                 case Il2CppTypeEnum.IL2CPP_TYPE_U2:
-                    return moduleDefinition.ImportReference(typeSystem.UInt16);
+                    return Import(moduleDefinition, typeSystem.UInt16);
                 case Il2CppTypeEnum.IL2CPP_TYPE_I4:
-                    return moduleDefinition.ImportReference(typeSystem.Int32);
+                    return Import(moduleDefinition, typeSystem.Int32);
                 case Il2CppTypeEnum.IL2CPP_TYPE_U4:
-                    return moduleDefinition.ImportReference(typeSystem.UInt32);
+                    return Import(moduleDefinition, typeSystem.UInt32);
                 case Il2CppTypeEnum.IL2CPP_TYPE_I:
-                    return moduleDefinition.ImportReference(typeSystem.IntPtr);
+                    return Import(moduleDefinition, typeSystem.IntPtr);
                 case Il2CppTypeEnum.IL2CPP_TYPE_U:
-                    return moduleDefinition.ImportReference(typeSystem.UIntPtr);
+                    return Import(moduleDefinition, typeSystem.UIntPtr);
                 case Il2CppTypeEnum.IL2CPP_TYPE_I8:
-                    return moduleDefinition.ImportReference(typeSystem.Int64);
+                    return Import(moduleDefinition, typeSystem.Int64);
                 case Il2CppTypeEnum.IL2CPP_TYPE_U8:
-                    return moduleDefinition.ImportReference(typeSystem.UInt64);
+                    return Import(moduleDefinition, typeSystem.UInt64);
                 case Il2CppTypeEnum.IL2CPP_TYPE_R4:
-                    return moduleDefinition.ImportReference(typeSystem.Single);
+                    return Import(moduleDefinition, typeSystem.Single);
                 case Il2CppTypeEnum.IL2CPP_TYPE_R8:
-                    return moduleDefinition.ImportReference(typeSystem.Double);
+                    return Import(moduleDefinition, typeSystem.Double);
                 case Il2CppTypeEnum.IL2CPP_TYPE_STRING:
-                    return moduleDefinition.ImportReference(typeSystem.String);
+                    return Import(moduleDefinition, typeSystem.String);
                 case Il2CppTypeEnum.IL2CPP_TYPE_TYPEDBYREF:
-                    return moduleDefinition.ImportReference(typeSystem.TypedReference);
+                    return Import(moduleDefinition, typeSystem.TypedReference);
                 case Il2CppTypeEnum.IL2CPP_TYPE_CLASS:
                 case Il2CppTypeEnum.IL2CPP_TYPE_VALUETYPE:
                     {
                         var typeDef = executor.GetTypeDefinitionFromIl2CppType(il2CppType);
-                        var typeDefinition = typeDefinitionDic[typeDef];
-                        return moduleDefinition.ImportReference(typeDefinition);
+                        // Protected/obfuscated binaries can yield type references that
+                        // don't resolve to a known type definition; fall back to
+                        // System.Object instead of throwing.
+                        if (typeDef == null || !typeDefinitionDic.TryGetValue(typeDef, out var typeDefinition))
+                        {
+                            return Import(moduleDefinition, typeSystem.Object);
+                        }
+                        return Import(moduleDefinition, typeDefinition);
                     }
                 case Il2CppTypeEnum.IL2CPP_TYPE_ARRAY:
                     {
@@ -519,8 +774,11 @@ namespace Il2CppDumper
                     {
                         var genericClass = il2Cpp.MapVATR<Il2CppGenericClass>(il2CppType.data.generic_class);
                         var typeDef = executor.GetGenericClassTypeDefinition(genericClass);
-                        var typeDefinition = typeDefinitionDic[typeDef];
-                        var genericInstanceType = new GenericInstanceType(moduleDefinition.ImportReference(typeDefinition));
+                        if (typeDef == null || !typeDefinitionDic.TryGetValue(typeDef, out var typeDefinition))
+                        {
+                            return Import(moduleDefinition, typeSystem.Object);
+                        }
+                        var genericInstanceType = new GenericInstanceType(Import(moduleDefinition, typeDefinition));
                         var genericInst = il2Cpp.MapVATR<Il2CppGenericInst>(genericClass.context.class_inst);
                         var pointers = il2Cpp.MapVATR<ulong>(genericInst.type_argv, genericInst.type_argc);
                         foreach (var pointer in pointers)
@@ -579,7 +837,7 @@ namespace Il2CppDumper
                             {
                                 var methodPointer = executor.customAttributeGenerators[attributeIndex];
                                 var fixedMethodPointer = il2Cpp.GetRVA(methodPointer);
-                                var customAttribute = new CustomAttribute(moduleDefinition.ImportReference(attributeAttribute));
+                                var customAttribute = new CustomAttribute(Import(moduleDefinition, attributeAttribute));
                                 var name = new CustomAttributeNamedArgument("Name", new CustomAttributeArgument(stringType, typeDefinition.Name));
                                 var rva = new CustomAttributeNamedArgument("RVA", new CustomAttributeArgument(stringType, $"0x{fixedMethodPointer:X}"));
                                 var offset = new CustomAttributeNamedArgument("Offset", new CustomAttributeArgument(stringType, $"0x{il2Cpp.MapVATR(methodPointer):X}"));
@@ -594,7 +852,9 @@ namespace Il2CppDumper
                     {
                         var startRange = metadata.attributeDataRanges[attributeIndex];
                         var endRange = metadata.attributeDataRanges[attributeIndex + 1];
-                        metadata.Position = metadata.header.attributeDataOffset + startRange.startOffset;
+                        metadata.Position = (ulong)(metadata.Version >= 38
+                            ? metadata.header.attributeData.offset + startRange.startOffset
+                            : metadata.header.attributeDataOffset + startRange.startOffset);
                         var buff = metadata.ReadBytes((int)(endRange.startOffset - startRange.startOffset));
                         var reader = new CustomAttributeDataReader(executor, buff);
                         if (reader.Count != 0)
@@ -603,7 +863,7 @@ namespace Il2CppDumper
                             {
                                 var visitor = reader.VisitCustomAttributeData();
                                 var methodDefinition = methodDefinitionDic[visitor.CtorIndex];
-                                var customAttribute = new CustomAttribute(moduleDefinition.ImportReference(methodDefinition));
+                                var customAttribute = new CustomAttribute(Import(moduleDefinition, methodDefinition));
                                 foreach (var argument in visitor.Arguments)
                                 {
                                     var parameterDefinition = methodDefinition.Parameters[argument.Index];
@@ -638,19 +898,29 @@ namespace Il2CppDumper
                 }
                 catch
                 {
-                    Console.WriteLine($"ERROR: Error while restoring attributeIndex {attributeIndex}");
+                    if (attributeRestoreErrorFirst < 0 ||
+                        attributeIndex < attributeRestoreErrorFirst)
+                    {
+                        attributeRestoreErrorFirst = attributeIndex;
+                    }
+
+                    if (attributeRestoreErrorLast < 0 ||
+                        attributeIndex > attributeRestoreErrorLast)
+                    {
+                        attributeRestoreErrorLast = attributeIndex;
+                    }
                 }
             }
         }
 
-        private static bool TryRestoreCustomAttribute(TypeDefinition attributeType, ModuleDefinition moduleDefinition, Collection<CustomAttribute> customAttributes)
+        private bool TryRestoreCustomAttribute(TypeDefinition attributeType, ModuleDefinition moduleDefinition, Collection<CustomAttribute> customAttributes)
         {
             if (attributeType.Methods.Count == 1 && attributeType.Name != "CompilerGeneratedAttribute")
             {
                 var methodDefinition = attributeType.Methods[0];
                 if (methodDefinition.Name == ".ctor" && methodDefinition.Parameters.Count == 0)
                 {
-                    var customAttribute = new CustomAttribute(moduleDefinition.ImportReference(methodDefinition));
+                    var customAttribute = new CustomAttribute(Import(moduleDefinition, methodDefinition));
                     customAttributes.Add(customAttribute);
                     return true;
                 }
@@ -670,7 +940,12 @@ namespace Il2CppDumper
                 genericParameterDic.Add(param, genericParameter);
                 for (int i = 0; i < param.constraintsCount; ++i)
                 {
-                    var il2CppType = il2Cpp.types[metadata.constraintIndices[param.constraintsStart + i]];
+                    var constraintTypeIndex = metadata.constraintIndices[param.constraintsStart + i];
+                    if (constraintTypeIndex < 0 || constraintTypeIndex >= il2Cpp.types.Length)
+                    {
+                        continue;
+                    }
+                    var il2CppType = il2Cpp.types[constraintTypeIndex];
                     genericParameter.Constraints.Add(new GenericParameterConstraint(GetTypeReference((MemberReference)iGenericParameterProvider, il2CppType)));
                 }
             }
@@ -684,7 +959,7 @@ namespace Il2CppDumper
             {
                 if (blobValue.il2CppTypeEnum == Il2CppTypeEnum.IL2CPP_TYPE_IL2CPP_TYPE_INDEX)
                 {
-                    val = new CustomAttributeArgument(memberReference.Module.ImportReference(typeof(Type)), GetTypeReference(memberReference, (Il2CppType)val));
+                    val = new CustomAttributeArgument(Import(memberReference.Module, systemTypeType), GetTypeReference(memberReference, (Il2CppType)val));
                 }
                 else
                 {
@@ -725,6 +1000,7 @@ namespace Il2CppDumper
             "System.Int64", "System.UInt64", "System.Single", "System.Double",
             "System.String", "System.Object", "System.Type",
         };
+
         private static bool IsCustomAttributeSerializable(CustomAttribute customAttribute)
         {
             foreach (var arg in customAttribute.ConstructorArguments)
@@ -741,6 +1017,7 @@ namespace Il2CppDumper
             }
             return true;
         }
+
         private static bool IsAttributeArgumentSerializable(CustomAttributeArgument argument)
         {
             var type = argument.Type;
